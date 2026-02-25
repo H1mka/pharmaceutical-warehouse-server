@@ -16,18 +16,13 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from apps.inventory.views import (
-    home,
-    create_product,
-    products_list_create,
-    product_detail,
-)
+from apps.products import views as products_views
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    path("", home),
+    path("", products_views.home),
 
     # Product endpoints
-    path("products", products_list_create, name="products_list_create"),
-    path("products/<str:sku>", product_detail, name="product_detail"),
+    path("products", products_views.products_list_create, name="products_list_create"),
+    path("products/<str:sku>", products_views.product_detail, name="product_detail"),
 ]
