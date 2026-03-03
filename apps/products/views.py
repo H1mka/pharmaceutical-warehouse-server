@@ -5,6 +5,10 @@ from mongoengine.errors import DoesNotExist, ValidationError
 import datetime
 import json
 
+# models
+from apps.inventory.models import Inventory
+from apps.storage_location.models import StorageLocation
+
 
 def home(request):
     return HttpResponse("Home url")
@@ -52,6 +56,7 @@ def products_list_create(request):
             body = json.loads(request.body.decode("utf-8"))
         except json.JSONDecodeError:
             return JsonResponse({"error": "Invalid JSON"}, status=400)
+        print('POST METHOD', body)
 
         product = Product()
         # required fields
@@ -62,6 +67,7 @@ def products_list_create(request):
         product.form = body.get("form")
         product.dosage = body.get("dosage")
         product.package_size = body.get("package_size")
+        quantity = body.get('quantity')
 
         expiration_date = body.get("expiration_date")
         if expiration_date:
@@ -79,9 +85,61 @@ def products_list_create(request):
                 )
 
         try:
+            duplicate_product = Product.objects(sku=body.get("sku")).first() or {}
+            if duplicate_product:
+                return JsonResponse({"error": "Tried to save duplicate unique sku values"}, status=400)
+        except ValidationError as e:
+            return JsonResponse({"error": "Tried to save duplicate unique sku values"}, status=400)
+
+        try:
             product.save()
         except ValidationError as e:
             return JsonResponse({"error": str(e)}, status=400)
+        
+        # If quantity specified and > 0, automatically find storage location
+        # and create inventory record.
+        if isinstance(quantity, int) and quantity > 0:
+            # choose first active storage location with enough free capacity
+            locations = StorageLocation.objects(is_active=True)
+            chosen_location = None
+            for loc in locations:
+                free_space = (loc.capacity or 0) - (loc.current_load or 0)
+                if free_space >= quantity:
+                    chosen_location = loc
+                    break
+
+            if not chosen_location:
+                # roll back created product to keep data consistent
+                product.delete()
+                return JsonResponse(
+                    {
+                        "error": "No storage location with enough free capacity for this quantity"
+                    },
+                    status=400,
+                )
+
+            inventory = Inventory(
+                product=product,
+                storage_location=chosen_location,
+                quantity=quantity,
+                reserved=0,
+            )
+            try:
+                inventory.save()
+            except ValidationError as e:
+                product.delete()
+                return JsonResponse({"error": str(e)}, status=400)
+
+            # update current load of storage location
+            chosen_location.current_load = (chosen_location.current_load or 0) + quantity
+            try:
+                chosen_location.save()
+            except ValidationError as e:
+                # if save failed, roll back created entities
+                inventory.delete()
+                product.delete()
+                return JsonResponse({"error": str(e)}, status=400)
+
 
         return JsonResponse(product_to_dict(product), status=201)
 
