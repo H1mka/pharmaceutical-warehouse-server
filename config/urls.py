@@ -16,10 +16,39 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from apps.inventory.views import home, create_product
+from apps.products import views as products_views
+from apps.storage_location import views as storage_location_views
+from apps.inventory import views as inventory_views
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
-    path('', home),
-    path('create_product', create_product)
+    path("admin/", admin.site.urls),
+    path("", products_views.home),
+
+    # Product endpoints
+    path("products", products_views.products_list_create, name="products_list_create"),
+    path("products/<str:sku>", products_views.product_detail, name="product_detail"),
+
+    # Storage locations CRUD
+    path(
+        "storage-locations",
+        storage_location_views.storage_location_list_create,
+        name="storage_location_list_create",
+    ),
+    path(
+        "storage-locations/<str:storage_location_id>",
+        storage_location_views.storage_location_detail,
+        name="storage_location_detail",
+    ),
+
+    # Inventory CRUD
+    path(
+        "inventory",
+        inventory_views.inventory_list_create,
+        name="inventory_list_create",
+    ),
+    path(
+        "inventory/<str:inventory_id>",
+        inventory_views.inventory_detail,
+        name="inventory_detail",
+    ),
 ]

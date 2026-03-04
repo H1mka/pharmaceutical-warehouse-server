@@ -1,18 +1,15 @@
 from django.db import models
-from mongoengine import Document, StringField, IntField, DateTimeField
+from mongoengine import Document, StringField, IntField, DateTimeField, ReferenceField
 import datetime
+from apps.products.models import Product
+from apps.storage_location.models import StorageLocation
 
 # Create your models here.
 
-class Product(Document):
-    sku = StringField(required=True, unique=True) # unique articule
-    name = StringField(required=True)
-    manufacturer = StringField()
-    form = StringField()
-    dosage = StringField()
-    package_size = IntField()
-    expiration_date = DateTimeField()
-    created_at = DateTimeField(default=datetime.datetime.utcnow)
-    updated_at = DateTimeField(default=datetime.datetime.utcnow)
+class Inventory(Document):
+  product = ReferenceField(Product, required=True)
+  storage_location = ReferenceField(StorageLocation, required=True)
 
-    meta = {'collection': 'products'}
+  quantity = IntField(required=True)
+  reserved = IntField(default=0)
+  last_movement_at = DateTimeField(default=datetime.datetime.utcnow)
