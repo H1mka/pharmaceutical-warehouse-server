@@ -1,3 +1,4 @@
+https://nginx.org/en/download.html
 # Introduction
 
 Project is written with django 6.0 and python 3.14 in mind.
