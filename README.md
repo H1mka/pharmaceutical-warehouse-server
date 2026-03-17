@@ -15,10 +15,6 @@ First clone the repository from Github and switch to the new directory:
 
 Activate the virtualenv for your project.
 
-Install project dependencies:
-
-    $ pip install -r requirements/local.txt
-
 Create a virtual environment (venv):
 
     $ python -m venv .venv
