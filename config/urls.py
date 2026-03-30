@@ -19,6 +19,7 @@ from django.urls import path
 from apps.products import views as products_views
 from apps.storage_location import views as storage_location_views
 from apps.inventory import views as inventory_views
+from apps.logs import views as logs_views
 from apps.users import views as users_views
 
 urlpatterns = [
@@ -26,8 +27,15 @@ urlpatterns = [
     path("", products_views.home),
 
     # Product endpoints
-    path("products", products_views.products_list_create, name="products_list_create"),
-    path("products/<str:sku>", products_views.product_detail, name="product_detail"),
+    path(
+        "products", 
+        products_views.products_list_create, name="products_list_create"
+    ),
+    path(
+        "products/<str:sku>", 
+        products_views.product_detail, 
+        name="product_detail"
+    ),
 
     # Storage locations CRUD
     path(
@@ -51,6 +59,23 @@ urlpatterns = [
         "inventory/<str:inventory_id>",
         inventory_views.inventory_detail,
         name="inventory_detail",
+    ),
+
+    # Logs CRUD
+    path(
+        "logs",
+        logs_views.logs_list_create,
+        name="logs_list_create",
+    ),
+    path(
+        "logs/",
+        logs_views.logs_list_create,
+        name="logs_list_create",
+    ),
+    path(
+        "logs/<str:log_id>",
+        logs_views.log_detail,
+        name="log_detail",
     ),
     
     # Auth endpoints
