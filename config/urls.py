@@ -67,6 +67,11 @@ urlpatterns = [
         name="logs_list_create",
     ),
     path(
+        "logs/",
+        logs_views.logs_list_create,
+        name="logs_list_create",
+    ),
+    path(
         "logs/<str:log_id>",
         logs_views.log_detail,
         name="log_detail",
