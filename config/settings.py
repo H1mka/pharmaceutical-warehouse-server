@@ -79,7 +79,7 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 
 STATIC_URL = '/static/'
-STATIC_ROOT == BASE_DIR / 'static'
+STATIC_ROOT = BASE_DIR / 'static'
 
 
 # Database
