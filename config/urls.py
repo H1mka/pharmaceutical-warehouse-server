@@ -20,6 +20,7 @@ from apps.products import views as products_views
 from apps.storage_location import views as storage_location_views
 from apps.inventory import views as inventory_views
 from apps.logs import views as logs_views
+from apps.users import views as users_views
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -76,4 +77,8 @@ urlpatterns = [
         logs_views.log_detail,
         name="log_detail",
     ),
+    
+    # Auth endpoints
+    path("auth/register", users_views.register, name="auth_register"),
+    path("auth/login", users_views.login, name="auth_login"),
 ]

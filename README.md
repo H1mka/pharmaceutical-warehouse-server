@@ -1,3 +1,4 @@
+https://nginx.org/en/download.html
 # Introduction
 
 Project is written with django 6.0 and python 3.14 in mind.
@@ -14,10 +15,6 @@ First clone the repository from Github and switch to the new directory:
     $ git clone https://github.com/H1mka/pharmaceutical-warehouse-server
 
 Activate the virtualenv for your project.
-
-Install project dependencies:
-
-    $ pip install -r requirements/local.txt
 
 Create a virtual environment (venv):
 

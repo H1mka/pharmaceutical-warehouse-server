@@ -4,3 +4,4 @@ sqlparse==0.5.4
 tzdata==2025.2
 mongoengine==0.29.1
 python-dotenv==1.2.1
+pyjwt==2.12.0
