@@ -8,7 +8,6 @@ class StorageLocation(Document):
     row = IntField(required=True)
     column = IntField(required=True)
     capacity = IntField(required=True)
-    current_load = IntField(required=True)
     is_active = BooleanField(required=True, default=True)
     created_at = DateTimeField(default=datetime.datetime.utcnow)
 

@@ -141,7 +141,7 @@ def products_list_create(request):
                 return JsonResponse({"error": str(e)}, status=400)
 
 
-        return JsonResponse(product_to_dict(product), status=201)
+        return JsonResponse(product_to_dict(product), status=200)
 
     return HttpResponseNotAllowed(["GET", "POST"])
 
