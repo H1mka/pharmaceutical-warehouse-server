@@ -96,49 +96,59 @@ def products_list_create(request):
         except ValidationError as e:
             return JsonResponse({"error": str(e)}, status=400)
         
-        # If quantity specified and > 0, automatically find storage location
-        # and create inventory record.
+        # If quantity is specified, distribute it across free active storage locations.
+        # One storage location can contain only one inventory record.
         if isinstance(quantity, int) and quantity > 0:
-            # choose first active storage location with enough free capacity
-            locations = StorageLocation.objects(is_active=True)
-            chosen_location = None
-            for loc in locations:
-                free_space = (loc.capacity or 0) - (loc.current_load or 0)
-                if free_space >= quantity:
-                    chosen_location = loc
+            free_locations = []
+            for loc in StorageLocation.objects(is_active=True).order_by(
+                "zone", "shelf", "row", "column", "id"
+            ):
+                if not Inventory.objects(storage_location=loc).first():
+                    free_locations.append(loc)
+
+            remaining_quantity = quantity
+            created_inventories = []
+
+            for loc in free_locations:
+                if remaining_quantity <= 0:
                     break
 
-            if not chosen_location:
-                # roll back created product to keep data consistent
+                loc_capacity = loc.capacity or 0
+                if loc_capacity <= 0:
+                    continue
+
+                quantity_for_location = min(remaining_quantity, loc_capacity)
+                inventory = Inventory(
+                    product=product,
+                    storage_location=loc,
+                    quantity=quantity_for_location,
+                    reserved=0,
+                )
+
+                try:
+                    inventory.save()
+                except ValidationError as e:
+                    for created_inventory in created_inventories:
+                        created_inventory.delete()
+                    product.delete()
+                    return JsonResponse({"error": str(e)}, status=400)
+
+                created_inventories.append(inventory)
+                remaining_quantity -= quantity_for_location
+
+            if remaining_quantity > 0:
+                for created_inventory in created_inventories:
+                    created_inventory.delete()
                 product.delete()
                 return JsonResponse(
                     {
-                        "error": "No storage location with enough free capacity for this quantity"
+                        "error": (
+                            "Not enough free storage capacity to place all product quantity. "
+                            f"Unplaced quantity: {remaining_quantity}"
+                        )
                     },
                     status=400,
                 )
-
-            inventory = Inventory(
-                product=product,
-                storage_location=chosen_location,
-                quantity=quantity,
-                reserved=0,
-            )
-            try:
-                inventory.save()
-            except ValidationError as e:
-                product.delete()
-                return JsonResponse({"error": str(e)}, status=400)
-
-            # update current load of storage location
-            chosen_location.current_load = (chosen_location.current_load or 0) + quantity
-            try:
-                chosen_location.save()
-            except ValidationError as e:
-                # if save failed, roll back created entities
-                inventory.delete()
-                product.delete()
-                return JsonResponse({"error": str(e)}, status=400)
 
 
         return JsonResponse(product_to_dict(product), status=200)
