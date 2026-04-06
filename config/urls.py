@@ -19,7 +19,7 @@ from django.urls import path
 from apps.products import views as products_views
 from apps.storage_location import views as storage_location_views
 from apps.inventory import views as inventory_views
-from apps.logs import views as logs_views
+from apps.manipulator import views as manipulator_views
 from apps.users import views as users_views
 
 urlpatterns = [
@@ -61,20 +61,20 @@ urlpatterns = [
         name="inventory_detail",
     ),
 
-    # Logs CRUD
+    # Control panel logs CRUD
     path(
-        "logs",
-        logs_views.logs_list_create,
+        "control-panel/logs",
+        manipulator_views.logs_list_create,
         name="logs_list_create",
     ),
     path(
-        "logs/",
-        logs_views.logs_list_create,
+        "control-panel/logs/",
+        manipulator_views.logs_list_create,
         name="logs_list_create",
     ),
     path(
-        "logs/<str:log_id>",
-        logs_views.log_detail,
+        "control-panel/logs/<str:log_id>",
+        manipulator_views.log_detail,
         name="log_detail",
     ),
     
