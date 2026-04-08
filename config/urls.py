@@ -36,6 +36,11 @@ urlpatterns = [
         products_views.product_detail, 
         name="product_detail"
     ),
+    path(
+        "products/<str:sku>/receive",
+        products_views.receive_product,
+        name="receive_product",
+    ),
 
     # Storage locations CRUD
     path(

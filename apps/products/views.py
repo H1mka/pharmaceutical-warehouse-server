@@ -13,6 +13,78 @@ from apps.storage_location.models import StorageLocation
 def home(request):
     return HttpResponse("Home url")
 
+def allocate_product_quantity(alloc_product: Product, quantity: int):
+    remaining_quantity = quantity
+    history = []
+
+    storage_locations = StorageLocation.objects(is_active=True).order_by("zone", "shelf", "row", "column", "id")
+
+    # Step 1: add product to existing inventory
+    for loc in storage_locations:
+        if remaining_quantity <= 0:
+            break
+        
+        inventory = Inventory.objects(storage_location=loc, product=alloc_product).first()
+        print(loc.id, inventory)
+
+        if inventory:
+            capacity = loc.capacity or 0
+            current_qty = inventory.quantity or 0
+            can_add = capacity - current_qty
+
+            if can_add > 0:
+                add_qty = min(remaining_quantity, can_add)
+
+                # Save state before changes
+                history.append((inventory, inventory.quantity, False))
+
+                inventory.quantity += add_qty
+                inventory.save()
+                remaining_quantity -= add_qty
+
+
+    # Step 2: create new inventories with empty locations
+    if remaining_quantity <= 0:
+        return True, 0
+
+    # empty storage locations
+    free_locations = []
+
+    # find empty storage locations
+    for loc in storage_locations:
+        if remaining_quantity <= 0:
+            break
+
+        if not Inventory.objects(storage_location=loc).first():
+            max_capacity = loc.capacity or 0
+            if max_capacity <= 0:
+                continue
+
+            add_qty = min(remaining_quantity, max_capacity)
+            inventory = Inventory(
+                product=alloc_product,
+                storage_location=loc,
+                quantity=add_qty,
+                reserved=0,
+            )
+            inventory.save()
+
+            # save history for backup
+            history.append((inventory, 0, True))
+            remaining_quantity -= add_qty
+
+    if remaining_quantity > 0:
+        for item, old_qty, is_new in reversed(history):
+            if is_new:
+                item.delete()
+            else:
+                item.quantity = old_qty
+                item.save()
+
+        return False, remaining_quantity
+
+    return True, 0
+
 
 def product_to_dict(product: Product) -> dict:
     """
@@ -96,49 +168,21 @@ def products_list_create(request):
         except ValidationError as e:
             return JsonResponse({"error": str(e)}, status=400)
         
-        # If quantity is specified, distribute it across free active storage locations.
-        # One storage location can contain only one inventory record.
-        if isinstance(quantity, int) and quantity > 0:
-            free_locations = []
-            for loc in StorageLocation.objects(is_active=True).order_by(
-                "zone", "shelf", "row", "column", "id"
-            ):
-                if not Inventory.objects(storage_location=loc).first():
-                    free_locations.append(loc)
-
-            remaining_quantity = quantity
-            created_inventories = []
-
-            for loc in free_locations:
-                if remaining_quantity <= 0:
-                    break
-
-                loc_capacity = loc.capacity or 0
-                if loc_capacity <= 0:
-                    continue
-
-                quantity_for_location = min(remaining_quantity, loc_capacity)
-                inventory = Inventory(
-                    product=product,
-                    storage_location=loc,
-                    quantity=quantity_for_location,
-                    reserved=0,
+        if quantity is not None:
+            if not isinstance(quantity, int) or quantity <= 0:
+                product.delete()
+                return JsonResponse(
+                    {"error": "Field 'quantity' must be a positive integer"},
+                    status=400,
                 )
 
-                try:
-                    inventory.save()
-                except ValidationError as e:
-                    for created_inventory in created_inventories:
-                        created_inventory.delete()
-                    product.delete()
-                    return JsonResponse({"error": str(e)}, status=400)
+            try:
+                alloc_success, remaining_quantity = allocate_product_quantity(product, quantity)
+            except ValidationError as e:
+                product.delete()
+                return JsonResponse({"error": str(e)}, status=400)
 
-                created_inventories.append(inventory)
-                remaining_quantity -= quantity_for_location
-
-            if remaining_quantity > 0:
-                for created_inventory in created_inventories:
-                    created_inventory.delete()
+            if not alloc_success:
                 product.delete()
                 return JsonResponse(
                     {
@@ -222,3 +266,58 @@ def product_detail(request, sku: str):
         return JsonResponse({"message": "Product deleted"}, status=200)
 
     return HttpResponseNotAllowed(["GET", "PUT", "PATCH", "DELETE"])
+
+
+@csrf_exempt
+def receive_product(request, sku: str):
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+
+    try:
+        product = Product.objects.get(sku=sku)
+    except DoesNotExist:
+        return JsonResponse({"error": "Product not found"}, status=404)
+
+    try:
+        body = json.loads(request.body.decode("utf-8"))
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    quantity = body.get("quantity")
+    if not isinstance(quantity, int) or quantity <= 0:
+        return JsonResponse(
+            {"error": "Field 'quantity' must be a positive integer"},
+            status=400,
+        )
+
+    # alloc_success, remaining_quantity = allocate_product_quantity(product, quantity)
+    # return JsonResponse({"error": ""}, status=400)
+
+    try:
+        alloc_success, remaining_qty = allocate_product_quantity(product, quantity)
+    except ValidationError as e:
+        return JsonResponse({"error": str(e)}, status=400)
+
+    if not alloc_success:
+        return JsonResponse(
+            {
+                "error": (
+                    "Not enough free storage capacity to place all product quantity. "
+                    f"Unplaced quantity: {remaining_qty}"
+                )
+            },
+            status=400,
+        )
+
+    product.updated_at = datetime.datetime.utcnow()
+    product.save()
+
+    return JsonResponse(
+        {
+            "success": True,
+            "message": "Product received and placed in storage",
+            "sku": product.sku,
+            "added_quantity": quantity,
+        },
+        status=200,
+    )
