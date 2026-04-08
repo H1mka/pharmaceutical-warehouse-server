@@ -8,8 +8,8 @@ from apps.storage_location.models import StorageLocation
 
 class Inventory(Document):
   product = ReferenceField(Product, required=True)
-  storage_location = ReferenceField(StorageLocation, required=True)
+  storage_location = ReferenceField(StorageLocation, required=True, unique=True)
 
   quantity = IntField(required=True)
   reserved = IntField(default=0)
-  last_movement_at = DateTimeField(default=datetime.datetime.utcnow)
+  created_at = DateTimeField(default=datetime.datetime.utcnow)

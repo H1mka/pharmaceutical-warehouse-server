@@ -12,11 +12,9 @@ def storage_location_to_dict(storage_location: StorageLocation) -> dict:
     return {
         "id": str(storage_location.id),
         "zone": storage_location.zone,
-        "shelf": storage_location.shelf,
         "row": storage_location.row,
         "column": storage_location.column,
         "capacity": storage_location.capacity,
-        "current_load": storage_location.current_load,
         "is_active": storage_location.is_active,
         "created_at": storage_location.created_at.isoformat()
         if storage_location.created_at
@@ -43,11 +41,9 @@ def storage_location_list_create(request):
 
         storage_location = StorageLocation()
         storage_location.zone = body.get("zone")
-        storage_location.shelf = body.get("shelf")
         storage_location.row = body.get("row")
         storage_location.column = body.get("column")
         storage_location.capacity = body.get("capacity")
-        storage_location.current_load = body.get("current_load", 0)
         storage_location.is_active = body.get("is_active", True)
 
         try:
@@ -84,11 +80,9 @@ def storage_location_detail(request, storage_location_id: str):
 
         updatable_fields = [
             "zone",
-            "shelf",
             "row",
             "column",
             "capacity",
-            "current_load",
             "is_active",
         ]
 
