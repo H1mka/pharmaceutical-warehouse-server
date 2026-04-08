@@ -4,7 +4,6 @@ import datetime
 
 class StorageLocation(Document):
     zone = StringField(required=True)
-    shelf = IntField(required=True)
     row = IntField(required=True)
     column = IntField(required=True)
     capacity = IntField(required=True)

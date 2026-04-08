@@ -17,7 +17,7 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
     remaining_quantity = quantity
     history = []
 
-    storage_locations = StorageLocation.objects(is_active=True).order_by("zone", "shelf", "row", "column", "id")
+    storage_locations = StorageLocation.objects(is_active=True).order_by("zone", "row", "column", "id")
 
     # Step 1: add product to existing inventory
     for loc in storage_locations:
