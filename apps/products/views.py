@@ -119,9 +119,73 @@ def products_list_create(request):
     POST /products      -> create a product
     """
     if request.method == "GET":
-        products = Product.objects.all()
+        page_raw = request.GET.get("page", "1")
+        page_size_raw = request.GET.get("page_size", "10")
+
+        try:
+            page = int(page_raw)
+            page_size = int(page_size_raw)
+        except (TypeError, ValueError):
+            return JsonResponse(
+                {
+                    "success": False,
+                    "data": [],
+                    "extra": {"error": "Query params 'page' and 'page_size' must be integers"},
+                },
+                status=400,
+            )
+
+        if page <= 0 or page_size <= 0:
+            return JsonResponse(
+                {
+                    "success": False,
+                    "data": [],
+                    "extra": {
+                        "error": "Query params 'page' and 'page_size' must be positive integers"
+                    },
+                },
+                status=400,
+            )
+
+        page_size = min(page_size, 100)
+        total_items = Product.objects.count()
+        total_pages = max(1, (total_items + page_size - 1) // page_size)
+
+        if page > total_pages and total_items > 0:
+            return JsonResponse(
+                {
+                    "success": False,
+                    "data": [],
+                    "extra": {
+                        "error": "Page is out of range",
+                        "page": page,
+                        "page_size": page_size,
+                        "total_items": total_items,
+                        "total_pages": total_pages,
+                    },
+                },
+                status=400,
+            )
+
+        skip = (page - 1) * page_size
+        products = (
+            Product.objects.order_by("-created_at", "-id").skip(skip).limit(page_size)
+        )
         data = [product_to_dict(p) for p in products]
-        return JsonResponse(data, safe=False, status=200)
+
+        return JsonResponse(
+            {
+                "success": True,
+                "data": data,
+                "extra": {
+                    "page": page,
+                    "page_size": page_size,
+                    "total_items": total_items,
+                    "total_pages": total_pages
+                },
+            },
+            status=200,
+        )
 
     if request.method == "POST":
         try:
