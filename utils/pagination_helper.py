@@ -14,8 +14,6 @@ def generate_pagination(request, total_items):
   page_size = min(page_size, 100)
   total_pages = max(1, (total_items + page_size - 1) // page_size)
 
-  print(page, total_pages, total_items)
-
   if page > total_pages and total_items > 0:
     raise ValueError("Page is out of range")
 
