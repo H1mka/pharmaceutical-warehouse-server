@@ -25,6 +25,8 @@ class ManipulatorLog(Document):
 
     error_msg = StringField(null=True)
 
-    
-
-    meta = {'collection': 'tech_logs'}
+    meta = {'collection': 'logs.manipulator',
+            'indexes': [
+                '-timestamp', 
+            ]
+    }

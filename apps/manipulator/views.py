@@ -8,6 +8,7 @@ from mongoengine.errors import DoesNotExist, ValidationError
 from apps.manipulator.models import ManipulatorLog
 from apps.products.models import Product
 from apps.storage_location.models import StorageLocation
+from utils.pagination_helper import generate_pagination
 
 
 def log_to_dict(log: ManipulatorLog) -> dict:
@@ -43,13 +44,6 @@ def logs_list_create(request):
 	POST /logs 									-> add new log
 	"""
 	if request.method == "GET":
-		try:
-			limit = int(request.GET.get('limit', 10))
-			skip = int(request.GET.get('skip', 0))
-		except ValueError:
-			limit = 10
-			skip = 0
-
 		start_time_str = request.GET.get('start_time')
 		end_time_str = request.GET.get('end_time')
 		date_str = request.GET.get('date')
@@ -85,10 +79,33 @@ def logs_list_create(request):
 		except ValueError:
 			return JsonResponse({"error": "Invalid date or time format. Please use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS"}, status=400)
 
+		try:
+			pagination_data, skip = generate_pagination(request, ManipulatorLog.objects.count())
+		except ValueError as e:
+			return JsonResponse({
+							"success": False,
+							"data": [],
+							"error": str(e),
+					}, status=400)
+		except Exception as e:
+			return JsonResponse({"success": False, "error": "Unknown error"}, status=500)
+
 		# sort logs from new to old
-		logs = ManipulatorLog.objects(**query_filter).order_by('-timestamp').skip(skip).limit(limit)
+		logs = ManipulatorLog.objects(**query_filter).order_by('-timestamp').skip(skip).limit(pagination_data['page_size'])
 		data = [log_to_dict(log) for log in logs]
-		return JsonResponse(data, safe=False, status=200)
+
+		return JsonResponse(
+            {
+                "success": True,
+                "data": data,
+                "extra": pagination_data,
+            },
+            status=200,
+        )
+
+	# ============================================ #
+	# ================== POST ==================== #
+	# ============================================ #
 
 	if request.method == "POST":
 		try:
