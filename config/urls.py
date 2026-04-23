@@ -82,6 +82,11 @@ urlpatterns = [
         manipulator_views.log_detail,
         name="log_detail",
     ),
+    path(
+        "control-panel/manipulator-state",
+        manipulator_views.manipulator_detail,
+        name="manipulator_detail",
+    ),
     
     # Auth endpoints
     path("auth/register", users_views.register, name="auth_register"),

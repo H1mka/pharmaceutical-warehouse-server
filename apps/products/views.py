@@ -8,25 +8,64 @@ import json
 # models
 from apps.inventory.models import Inventory
 from apps.storage_location.models import StorageLocation
+from apps.manipulator.models import ManipulatorLog
 from utils.pagination_helper import generate_pagination
 
 
 def home(request):
     return HttpResponse("Home url")
 
+
+def _send_logs(logs_to_create):
+    import urllib.request
+    import urllib.error
+    url = "http://127.0.0.1:8000/control-panel/logs"
+    for log_data in logs_to_create:
+        req = urllib.request.Request(
+            url, 
+            data=json.dumps(log_data).encode('utf-8'), 
+            headers={'Content-Type': 'application/json'}, 
+            method='POST'
+        )
+        try:
+            with urllib.request.urlopen(req) as response:
+                pass
+        except urllib.error.URLError as e:
+            error_body = e.read().decode('utf-8') if hasattr(e, 'read') else str(e)
+            try:
+                err_dict = json.loads(error_body)
+                return False, err_dict.get("error", str(e))
+            except Exception:
+                return False, error_body or str(e)
+    return True, ""
+
+
 def allocate_product_quantity(alloc_product: Product, quantity: int):
+    total_quantity = quantity
     remaining_quantity = quantity
     history = []
+    logs_to_create = []
+
+    logs_to_create.append(
+        {
+            "operation_status": "SUCCESS",
+            "operation_type": "PICK",
+            "duration_ms": 1500,
+            "attempt": 1,
+            "storage_location": "69e74dfdb5f2df9a6d4cfb10",
+            "product": str(alloc_product.id),
+            "product_quantity": remaining_quantity
+        }
+    )
 
     storage_locations = StorageLocation.objects(is_active=True).order_by("zone", "row", "column", "id")
-
+    
     # Step 1: add product to existing inventory
     for loc in storage_locations:
         if remaining_quantity <= 0:
             break
         
         inventory = Inventory.objects(storage_location=loc, product=alloc_product).first()
-        print(loc.id, inventory)
 
         if inventory:
             capacity = loc.capacity or 0
@@ -36,21 +75,39 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
             if can_add > 0:
                 add_qty = min(remaining_quantity, can_add)
 
-                # Save state before changes
                 history.append((inventory, inventory.quantity, False))
 
                 inventory.quantity += add_qty
                 inventory.save()
+                
+                total_quantity -= add_qty
+
+                logs_to_create.append(
+                    {
+                        "operation_status": "SUCCESS",
+                        "operation_type": "MOVE",
+                        "duration_ms": 1500,
+                        "attempt": 1,
+                        "storage_location": str(loc.id),
+                        "product": str(alloc_product.id),
+                        "product_quantity": remaining_quantity
+                    }
+                )
+                logs_to_create.append(
+                    {
+                        "operation_status": "SUCCESS",
+                        "operation_type": "PUT",
+                        "duration_ms": 1500,
+                        "attempt": 1,
+                        "storage_location": str(loc.id),
+                        "product": str(alloc_product.id),
+                        "product_quantity": add_qty
+                    }
+                )
+
                 remaining_quantity -= add_qty
 
-
     # Step 2: create new inventories with empty locations
-    if remaining_quantity <= 0:
-        return True, 0
-
-    # empty storage locations
-    free_locations = []
-
     # find empty storage locations
     for loc in storage_locations:
         if remaining_quantity <= 0:
@@ -70,21 +127,53 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
             )
             inventory.save()
 
-            # save history for backup
             history.append((inventory, 0, True))
+
+            total_quantity -= add_qty
+
+            logs_to_create.append(
+                {
+                    "operation_status": "SUCCESS",
+                    "operation_type": "MOVE",
+                    "duration_ms": 1500,
+                    "attempt": 1,
+                    "storage_location": str(loc.id),
+                    "product": str(alloc_product.id),
+                    "product_quantity": remaining_quantity
+                }
+            )
+            logs_to_create.append(
+                {
+                    "operation_status": "SUCCESS",
+                    "operation_type": "PUT",
+                    "duration_ms": 1500,
+                    "attempt": 1,
+                    "storage_location": str(loc.id),
+                    "product": str(alloc_product.id),
+                    "product_quantity": add_qty
+                }
+            )
+
             remaining_quantity -= add_qty
 
     if remaining_quantity > 0:
+        err_msg = f"Not enough free storage capacity to place all product quantity. Unplaced quantity: {remaining_quantity}"
+        success = False
+    else:
+        success, err_msg = _send_logs(logs_to_create)
+
+    if not success:
         for item, old_qty, is_new in reversed(history):
             if is_new:
                 item.delete()
             else:
                 item.quantity = old_qty
                 item.save()
+        
 
-        return False, remaining_quantity
+        return False, err_msg
 
-    return True, 0
+    return True, ""
 
 
 def product_to_dict(product: Product) -> dict:
@@ -206,15 +295,7 @@ def products_list_create(request):
 
             if not alloc_success:
                 product.delete()
-                return JsonResponse(
-                    {
-                        "error": (
-                            "Not enough free storage capacity to place all product quantity. "
-                            f"Unplaced quantity: {remaining_quantity}"
-                        )
-                    },
-                    status=400,
-                )
+                return JsonResponse({"error": remaining_quantity}, status=400)
 
 
         return JsonResponse(product_to_dict(product), status=200)
@@ -292,6 +373,9 @@ def product_detail(request, sku: str):
 
 @csrf_exempt
 def receive_product(request, sku: str):
+    """
+    POST   /products/<sku>/receive?quantity=<quantity> -> receive_product
+    """
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
 
@@ -312,24 +396,13 @@ def receive_product(request, sku: str):
             status=400,
         )
 
-    # alloc_success, remaining_quantity = allocate_product_quantity(product, quantity)
-    # return JsonResponse({"error": ""}, status=400)
-
     try:
         alloc_success, remaining_qty = allocate_product_quantity(product, quantity)
     except ValidationError as e:
         return JsonResponse({"error": str(e)}, status=400)
 
     if not alloc_success:
-        return JsonResponse(
-            {
-                "error": (
-                    "Not enough free storage capacity to place all product quantity. "
-                    f"Unplaced quantity: {remaining_qty}"
-                )
-            },
-            status=400,
-        )
+        return JsonResponse({"error": remaining_qty}, status=400)
 
     product.updated_at = datetime.datetime.utcnow()
     product.save()
