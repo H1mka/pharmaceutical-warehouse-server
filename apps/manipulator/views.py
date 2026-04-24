@@ -14,6 +14,16 @@ def log_to_dict(log: ManipulatorLog) -> dict:
 	"""
 	Utility to serialize ManipulatorLog to dict for JSON response.
 	"""
+	try:
+		product_id = str(log.product.id) if log.product else None
+	except Exception:
+		product_id = "Deleted Product"
+
+	try:
+		location_id = str(log.storage_location.id) if log.storage_location else None
+	except Exception:
+		location_id = "Deleted Location"
+
 	return {
 		"id": str(log.id),
 		"timestamp": log.timestamp.isoformat() if log.timestamp else None,
@@ -25,8 +35,8 @@ def log_to_dict(log: ManipulatorLog) -> dict:
 		"duration_ms": log.duration_ms,
 		"attempt": log.attempt,
 
-		"storage_location": str(log.storage_location.id) if log.storage_location else None,
-		"product": str(log.product.id) if log.product else None,
+		"storage_location": location_id,
+		"product": product_id,
 		"product_quantity": log.product_quantity if log.product_quantity else None,
 
 		"error_msg": log.error_msg,
@@ -133,6 +143,7 @@ def logs_list_create(request):
 			try:
 				storage_location = StorageLocation.objects.get(id=storage_location_id)
 				log.storage_location = storage_location
+				Manipulator.objects.first().update(position=storage_location)
 			except DoesNotExist:
 				return JsonResponse({"error": f"Storage location with id {storage_location_id} not found"}, status=400)
 			except ValidationError:

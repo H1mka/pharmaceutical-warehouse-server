@@ -41,10 +41,12 @@ def _send_logs(logs_to_create):
 
 
 def allocate_product_quantity(alloc_product: Product, quantity: int):
-    total_quantity = quantity
+    # total_quantity = quantity
+    loading_zone_id = "69e74dfdb5f2df9a6d4cfb10"
+    date = datetime.datetime.utcnow()
     remaining_quantity = quantity
-    history = []
     logs_to_create = []
+    history = []
 
     logs_to_create.append(
         {
@@ -52,7 +54,7 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
             "operation_type": "PICK",
             "duration_ms": 1500,
             "attempt": 1,
-            "storage_location": "69e74dfdb5f2df9a6d4cfb10",
+            "storage_location": loading_zone_id,
             "product": str(alloc_product.id),
             "product_quantity": remaining_quantity
         }
@@ -80,7 +82,7 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
                 inventory.quantity += add_qty
                 inventory.save()
                 
-                total_quantity -= add_qty
+                # total_quantity -= add_qty
 
                 logs_to_create.append(
                     {
@@ -124,12 +126,13 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
                 storage_location=loc,
                 quantity=add_qty,
                 reserved=0,
+                created_at=date
             )
             inventory.save()
 
             history.append((inventory, 0, True))
 
-            total_quantity -= add_qty
+            # total_quantity -= add_qty
 
             logs_to_create.append(
                 {
@@ -172,6 +175,104 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
         
 
         return False, err_msg
+
+    return True, ""
+
+
+def dispense_product_quantity(alloc_product: Product, quantity: int):
+    delivery_zone_id = "69e74e15b5f2df9a6d4cfb11"
+
+    delivery_zone = StorageLocation.objects(id=delivery_zone_id).first()
+    if not delivery_zone:
+        raise ValidationError("Delivery Zone storage location not found.")
+
+    delivery_inventory = Inventory.objects(storage_location=delivery_zone, product=alloc_product).first()
+    if not delivery_inventory:
+        delivery_inventory = Inventory(
+            product=alloc_product,
+            storage_location=delivery_zone,
+            quantity=0,
+            reserved=0
+        )
+
+    remaining_quantity = quantity
+    history = []
+    logs_to_create = []
+
+    inventories = Inventory.objects(product=alloc_product, quantity__gt=0).order_by("created_at", "quantity")
+    print(inventories)
+    special_zones = ["69e74dfdb5f2df9a6d4cfb10", delivery_zone_id]
+
+    for inventory in inventories:
+        if remaining_quantity <= 0:
+            break
+            
+        loc = inventory.storage_location
+        if str(loc.id) in special_zones or not loc.is_active:
+            continue
+            
+        current_qty = inventory.quantity or 0
+        take_qty = min(remaining_quantity, current_qty)
+
+        if take_qty > 0:
+            history.append((inventory, inventory.quantity, False))
+
+            inventory.quantity -= take_qty
+            inventory.save()
+
+            logs_to_create.append(
+                {
+                    "operation_status": "SUCCESS",
+                    "operation_type": "PICK",
+                    "duration_ms": 1500,
+                    "attempt": 1,
+                    "storage_location": str(loc.id),
+                    "product": str(alloc_product.id),
+                    "product_quantity": take_qty
+                }
+            )
+            logs_to_create.append(
+                {
+                    "operation_status": "SUCCESS",
+                    "operation_type": "MOVE",
+                    "duration_ms": 1500,
+                    "attempt": 1,
+                    "storage_location": delivery_zone_id,
+                    "product": str(alloc_product.id),
+                    "product_quantity": take_qty
+                }
+            )
+            logs_to_create.append(
+                {
+                    "operation_status": "SUCCESS",
+                    "operation_type": "PUT",
+                    "duration_ms": 1500,
+                    "attempt": 1,
+                    "storage_location": delivery_zone_id,
+                    "product": str(alloc_product.id),
+                    "product_quantity": take_qty
+                }
+            )
+
+            remaining_quantity -= take_qty
+
+    if remaining_quantity > 0:
+        err_msg = f"Not enough product quantity in storage. Missing quantity: {remaining_quantity}"
+        success = False
+    else:
+        success, err_msg = _send_logs(logs_to_create)
+
+    if not success:
+        for item, old_qty, is_new in reversed(history):
+            if is_new:
+                item.delete()
+            else:
+                item.quantity = old_qty
+                item.save()
+        return False, err_msg
+
+    delivery_inventory.quantity += quantity
+    delivery_inventory.save()
 
     return True, ""
 
@@ -374,7 +475,7 @@ def product_detail(request, sku: str):
 @csrf_exempt
 def receive_product(request, sku: str):
     """
-    POST   /products/<sku>/receive?quantity=<quantity> -> receive_product
+    POST   /products/<sku>/receive -> receive_product
     """
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
@@ -413,6 +514,53 @@ def receive_product(request, sku: str):
             "message": "Product received and placed in storage",
             "sku": product.sku,
             "added_quantity": quantity,
+        },
+        status=200,
+    )
+
+
+@csrf_exempt
+def dispense_product(request, sku: str):
+    """
+    POST   /products/<sku>/dispense -> dispense_product
+    """
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+
+    try:
+        product = Product.objects.get(sku=sku)
+    except DoesNotExist:
+        return JsonResponse({"error": "Product not found"}, status=404)
+
+    try:
+        body = json.loads(request.body.decode("utf-8"))
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    quantity = body.get("quantity")
+    if not isinstance(quantity, int) or quantity <= 0:
+        return JsonResponse(
+            {"error": "Field 'quantity' must be a positive integer"},
+            status=400,
+        )
+
+    try:
+        dispense_success, remaining_qty = dispense_product_quantity(product, quantity)
+    except ValidationError as e:
+        return JsonResponse({"error": str(e)}, status=400)
+
+    if not dispense_success:
+        return JsonResponse({"error": remaining_qty}, status=400)
+
+    product.updated_at = datetime.datetime.utcnow()
+    product.save()
+
+    return JsonResponse(
+        {
+            "success": True,
+            "message": "Product dispensed",
+            "sku": product.sku,
+            "dispensed_quantity": quantity,
         },
         status=200,
     )
