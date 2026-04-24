@@ -4,11 +4,9 @@ import datetime
 
 class StorageLocation(Document):
     zone = StringField(required=True)
-    shelf = IntField(required=True)
     row = IntField(required=True)
     column = IntField(required=True)
     capacity = IntField(required=True)
-    current_load = IntField(required=True)
     is_active = BooleanField(required=True, default=True)
     created_at = DateTimeField(default=datetime.datetime.utcnow)
 
