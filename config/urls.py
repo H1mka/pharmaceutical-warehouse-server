@@ -41,6 +41,11 @@ urlpatterns = [
         products_views.receive_product,
         name="receive_product",
     ),
+    path(
+        "products/<str:sku>/dispense",
+        products_views.dispense_product,
+        name="dispense_product",
+    ),
 
     # Storage locations CRUD
     path(
@@ -81,6 +86,11 @@ urlpatterns = [
         "control-panel/logs/<str:log_id>",
         manipulator_views.log_detail,
         name="log_detail",
+    ),
+    path(
+        "control-panel/manipulator-state",
+        manipulator_views.manipulator_detail,
+        name="manipulator_detail",
     ),
     
     # Auth endpoints
