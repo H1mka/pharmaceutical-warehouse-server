@@ -310,8 +310,14 @@ def products_list_create(request):
     POST /products      -> create a product
     """
     if request.method == "GET":
+        product_name = request.GET.get("name", "")
+        products_qs = Product.objects.all()
+
+        if product_name:
+            products_qs = products_qs.filter(name__icontains=product_name)
+
         try:
-            pagination_data, skip = generate_pagination(request, Product.objects.count())
+            pagination_data, skip = generate_pagination(request, products_qs.count())
         except ValueError as e:
             return JsonResponse({
                     "success": False,
@@ -322,8 +328,11 @@ def products_list_create(request):
             return JsonResponse({"success": False, "error": "Unknown error"}, status=500)
 
         products = (
-            Product.objects.order_by("-created_at", "-id").skip(skip).limit(pagination_data['page_size'])
+            products_qs.order_by("-created_at", "-id")
+            .skip(skip)
+            .limit(pagination_data['page_size'])
         )
+
         data = [product_to_dict(p) for p in products]
         
         return JsonResponse(
