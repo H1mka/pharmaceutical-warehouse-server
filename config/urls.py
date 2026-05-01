@@ -21,8 +21,10 @@ from apps.storage_location import views as storage_location_views
 from apps.inventory import views as inventory_views
 from apps.manipulator import views as manipulator_views
 from apps.users import views as users_views
+from apps.qr_scanner import views as qr_scanner_views
 
 urlpatterns = [
+     path("api/qr-scan", qr_scanner_views.qr_scan),
     path("admin/", admin.site.urls),
     path("", products_views.home),
 
