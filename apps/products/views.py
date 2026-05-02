@@ -332,6 +332,8 @@ def dispense_product_quantity(alloc_product: Product, quantity: int):
             created_manipulator_logs = _create_manipulator_logs(logs_to_create)
             created_operation_log = OperationLogs(
                 operation_type="DISPENSE",
+                product=alloc_product,
+                product_quantity=dispensed_quantity,
                 manipulator_task=created_manipulator_logs[-1] if created_manipulator_logs else None,
                 message=f"Dispensed {dispensed_quantity} units of product {alloc_product.sku}",
             )
