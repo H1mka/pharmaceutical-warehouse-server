@@ -12,6 +12,7 @@ def storage_location_to_dict(storage_location: StorageLocation) -> dict:
     return {
         "id": str(storage_location.id),
         "zone": storage_location.zone,
+        "location_type": storage_location.location_type,
         "row": storage_location.row,
         "column": storage_location.column,
         "capacity": storage_location.capacity,
@@ -41,6 +42,7 @@ def storage_location_list_create(request):
 
         storage_location = StorageLocation()
         storage_location.zone = body.get("zone")
+        storage_location.location_type = body.get("location_type", "STORAGE")
         storage_location.row = body.get("row")
         storage_location.column = body.get("column")
         storage_location.capacity = body.get("capacity")
@@ -80,6 +82,7 @@ def storage_location_detail(request, storage_location_id: str):
 
         updatable_fields = [
             "zone",
+            "location_type",
             "row",
             "column",
             "capacity",
