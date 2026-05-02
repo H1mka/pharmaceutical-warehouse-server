@@ -47,7 +47,8 @@ INSTALLED_APPS = [
     'apps.inventory',
     'apps.storage_location',
     'apps.products',
-    'apps.users'
+    'apps.users',
+    'apps.operation_logs'
 ]
 
 MIDDLEWARE = [
