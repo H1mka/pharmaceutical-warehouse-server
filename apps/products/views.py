@@ -327,13 +327,26 @@ def products_list_create(request):
         except Exception as e:
             return JsonResponse({"success": False, "error": "Unknown error"}, status=500)
 
-        products = (
+        products = list(
             products_qs.order_by("-created_at", "-id")
             .skip(skip)
             .limit(pagination_data['page_size'])
         )
 
-        data = [product_to_dict(p) for p in products]
+        product_quantity_by_id = {str(product.id): 0 for product in products}
+
+        if products:
+            inventories = Inventory.objects(product__in=products).only("product", "quantity")
+
+            for inventory in inventories:
+                product_id = str(inventory.product.id)
+                product_quantity_by_id[product_id] = product_quantity_by_id.get(product_id, 0) + (inventory.quantity or 0)
+
+        data = []
+        for product in products:
+            product_data = product_to_dict(product)
+            product_data["quantity"] = product_quantity_by_id.get(str(product.id), 0)
+            data.append(product_data)
         
         return JsonResponse(
             {
