@@ -4,6 +4,7 @@ from .models import Product
 from mongoengine.errors import DoesNotExist, ValidationError
 import datetime
 import json
+import random
 
 # models
 from apps.inventory.models import Inventory
@@ -20,6 +21,8 @@ def home(request):
 def _normalize_zone_name(zone):
     return (zone or "").strip().upper().replace("-", "_").replace(" ", "_")
 
+def generate_random_delay():
+    return random.uniform(5, 20) * 1000
 
 def _get_location_type(storage_location):
     location_type = getattr(storage_location, "location_type", None)
@@ -124,7 +127,7 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
         {
             "operation_status": "SUCCESS",
             "operation_type": "PICK",
-            "duration_ms": 1500,
+            "duration_ms": generate_random_delay(),
             "attempt": 1,
             "storage_location": str(loading_zone.id),
             "product": str(alloc_product.id),
@@ -164,7 +167,7 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
                     {
                         "operation_status": "SUCCESS",
                         "operation_type": "MOVE",
-                        "duration_ms": 1500,
+                        "duration_ms": generate_random_delay(),
                         "attempt": 1,
                         "storage_location": str(loc.id),
                         "product": str(alloc_product.id),
@@ -175,7 +178,7 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
                     {
                         "operation_status": "SUCCESS",
                         "operation_type": "PUT",
-                        "duration_ms": 1500,
+                        "duration_ms": generate_random_delay(),
                         "attempt": 1,
                         "storage_location": str(loc.id),
                         "product": str(alloc_product.id),
@@ -214,7 +217,7 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
                 {
                     "operation_status": "SUCCESS",
                     "operation_type": "MOVE",
-                    "duration_ms": 1500,
+                    "duration_ms": generate_random_delay(),
                     "attempt": 1,
                     "storage_location": str(loc.id),
                     "product": str(alloc_product.id),
@@ -225,7 +228,7 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
                 {
                     "operation_status": "SUCCESS",
                     "operation_type": "PUT",
-                    "duration_ms": 1500,
+                    "duration_ms": generate_random_delay(),
                     "attempt": 1,
                     "storage_location": str(loc.id),
                     "product": str(alloc_product.id),
@@ -287,7 +290,7 @@ def dispense_product_quantity(alloc_product: Product, quantity: int):
                 {
                     "operation_status": "SUCCESS",
                     "operation_type": "PICK",
-                    "duration_ms": 1500,
+                    "duration_ms": generate_random_delay(),
                     "attempt": 1,
                     "storage_location": str(loc.id),
                     "product": str(alloc_product.id),
@@ -298,7 +301,7 @@ def dispense_product_quantity(alloc_product: Product, quantity: int):
                 {
                     "operation_status": "SUCCESS",
                     "operation_type": "MOVE",
-                    "duration_ms": 1500,
+                    "duration_ms": generate_random_delay(),
                     "attempt": 1,
                     "storage_location": str(delivery_zone.id),
                     "product": str(alloc_product.id),
@@ -309,7 +312,7 @@ def dispense_product_quantity(alloc_product: Product, quantity: int):
                 {
                     "operation_status": "SUCCESS",
                     "operation_type": "PUT",
-                    "duration_ms": 1500,
+                    "duration_ms": generate_random_delay(),
                     "attempt": 1,
                     "storage_location": str(delivery_zone.id),
                     "product": str(alloc_product.id),
