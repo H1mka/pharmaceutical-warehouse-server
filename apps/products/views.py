@@ -8,12 +8,43 @@ import json
 # models
 from apps.inventory.models import Inventory
 from apps.storage_location.models import StorageLocation
-from apps.manipulator.models import ManipulatorLog
+from apps.manipulator.models import Manipulator, ManipulatorLog
+from apps.operation_logs.models import OperationLogs
 from utils.pagination_helper import generate_pagination
 
 
 def home(request):
     return HttpResponse("Home url")
+
+
+def _normalize_zone_name(zone):
+    return (zone or "").strip().upper().replace("-", "_").replace(" ", "_")
+
+
+def _get_location_type(storage_location):
+    location_type = getattr(storage_location, "location_type", None)
+    if location_type and location_type != "STORAGE":
+        return location_type
+
+    normalized_zone = _normalize_zone_name(storage_location.zone)
+    if normalized_zone in ["LOADING", "LOADING_ZONE"]:
+        return "LOADING"
+    if normalized_zone in ["DELIVERY", "DELIVERY_ZONE"]:
+        return "DELIVERY"
+
+    return "STORAGE"
+
+
+def _is_storage_location(storage_location):
+    return _get_location_type(storage_location) == "STORAGE"
+
+
+def _get_special_storage_location(location_type):
+    for storage_location in StorageLocation.objects(is_active=True):
+        if _get_location_type(storage_location) == location_type:
+            return storage_location
+
+    raise ValidationError(f"{location_type.title()} storage location not found.")
 
 
 def _send_logs(logs_to_create):
@@ -40,10 +71,51 @@ def _send_logs(logs_to_create):
     return True, ""
 
 
+def _create_manipulator_logs(logs_to_create):
+    created_logs = []
+
+    try:
+        for log_data in logs_to_create:
+            storage_location = None
+            storage_location_id = log_data.get("storage_location")
+            if storage_location_id:
+                storage_location = StorageLocation.objects.get(id=storage_location_id)
+
+            product = None
+            product_id = log_data.get("product")
+            if product_id:
+                product = Product.objects.get(id=product_id)
+
+            manipulator_log = ManipulatorLog(
+                operation_status=log_data.get("operation_status", "SUCCESS"),
+                operation_type=log_data.get("operation_type"),
+                duration_ms=log_data.get("duration_ms"),
+                attempt=log_data.get("attempt"),
+                storage_location=storage_location,
+                product=product,
+                product_quantity=log_data.get("product_quantity"),
+                error_msg=log_data.get("error_msg"),
+            )
+            manipulator_log.save()
+            created_logs.append(manipulator_log)
+
+            manipulator = Manipulator.objects.first()
+            if manipulator and storage_location:
+                manipulator.position = storage_location
+                manipulator.save()
+    except Exception:
+        for log in reversed(created_logs):
+            log.delete()
+
+        raise
+
+    return created_logs
+
+
 def allocate_product_quantity(alloc_product: Product, quantity: int):
     # total_quantity = quantity
-    loading_zone_id = "69e74dfdb5f2df9a6d4cfb10"
     date = datetime.datetime.utcnow()
+    loading_zone = _get_special_storage_location("LOADING")
     remaining_quantity = quantity
     logs_to_create = []
     history = []
@@ -54,13 +126,17 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
             "operation_type": "PICK",
             "duration_ms": 1500,
             "attempt": 1,
-            "storage_location": loading_zone_id,
+            "storage_location": str(loading_zone.id),
             "product": str(alloc_product.id),
             "product_quantity": remaining_quantity
         }
     )
 
-    storage_locations = StorageLocation.objects(is_active=True).order_by("zone", "row", "column", "id")
+    storage_locations = [
+        location
+        for location in StorageLocation.objects(is_active=True).order_by("zone", "row", "column", "id")
+        if _is_storage_location(location)
+    ]
     
     # Step 1: add product to existing inventory
     for loc in storage_locations:
@@ -180,35 +256,22 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
 
 
 def dispense_product_quantity(alloc_product: Product, quantity: int):
-    delivery_zone_id = "69e74e15b5f2df9a6d4cfb11"
-
-    delivery_zone = StorageLocation.objects(id=delivery_zone_id).first()
-    if not delivery_zone:
-        raise ValidationError("Delivery Zone storage location not found.")
-
-    delivery_inventory = Inventory.objects(storage_location=delivery_zone, product=alloc_product).first()
-    if not delivery_inventory:
-        delivery_inventory = Inventory(
-            product=alloc_product,
-            storage_location=delivery_zone,
-            quantity=0,
-            reserved=0
-        )
+    delivery_zone = _get_special_storage_location("DELIVERY")
 
     remaining_quantity = quantity
     history = []
     logs_to_create = []
+    created_manipulator_logs = []
+    created_operation_log = None
 
     inventories = Inventory.objects(product=alloc_product, quantity__gt=0).order_by("created_at", "quantity")
-    print(inventories)
-    special_zones = ["69e74dfdb5f2df9a6d4cfb10", delivery_zone_id]
 
     for inventory in inventories:
         if remaining_quantity <= 0:
             break
             
         loc = inventory.storage_location
-        if str(loc.id) in special_zones or not loc.is_active:
+        if not loc.is_active or not _is_storage_location(loc):
             continue
             
         current_qty = inventory.quantity or 0
@@ -237,7 +300,7 @@ def dispense_product_quantity(alloc_product: Product, quantity: int):
                     "operation_type": "MOVE",
                     "duration_ms": 1500,
                     "attempt": 1,
-                    "storage_location": delivery_zone_id,
+                    "storage_location": str(delivery_zone.id),
                     "product": str(alloc_product.id),
                     "product_quantity": take_qty
                 }
@@ -248,7 +311,7 @@ def dispense_product_quantity(alloc_product: Product, quantity: int):
                     "operation_type": "PUT",
                     "duration_ms": 1500,
                     "attempt": 1,
-                    "storage_location": delivery_zone_id,
+                    "storage_location": str(delivery_zone.id),
                     "product": str(alloc_product.id),
                     "product_quantity": take_qty
                 }
@@ -256,11 +319,23 @@ def dispense_product_quantity(alloc_product: Product, quantity: int):
 
             remaining_quantity -= take_qty
 
+    dispensed_quantity = quantity - remaining_quantity
+
     if remaining_quantity > 0:
         err_msg = f"Not enough product quantity in storage. Missing quantity: {remaining_quantity}"
         success = False
     else:
-        success, err_msg = _send_logs(logs_to_create)
+        try:
+            created_manipulator_logs = _create_manipulator_logs(logs_to_create)
+            created_operation_log = OperationLogs(
+                operation_type="DISPENSE",
+                manipulator_task=created_manipulator_logs[-1] if created_manipulator_logs else None,
+                message=f"Dispensed {dispensed_quantity} units of product {alloc_product.sku}",
+            )
+            created_operation_log.save()
+            success, err_msg = True, ""
+        except Exception as e:
+            success, err_msg = False, str(e)
 
     if not success:
         for item, old_qty, is_new in reversed(history):
@@ -269,10 +344,14 @@ def dispense_product_quantity(alloc_product: Product, quantity: int):
             else:
                 item.quantity = old_qty
                 item.save()
-        return False, err_msg
 
-    delivery_inventory.quantity += quantity
-    delivery_inventory.save()
+        if created_operation_log:
+            created_operation_log.delete()
+
+        for log in reversed(created_manipulator_logs):
+            log.delete()
+
+        return False, err_msg
 
     return True, ""
 
@@ -336,9 +415,12 @@ def products_list_create(request):
         product_quantity_by_id = {str(product.id): 0 for product in products}
 
         if products:
-            inventories = Inventory.objects(product__in=products).only("product", "quantity")
+            inventories = Inventory.objects(product__in=products).only("product", "quantity", "storage_location")
 
             for inventory in inventories:
+                if not _is_storage_location(inventory.storage_location):
+                    continue
+
                 product_id = str(inventory.product.id)
                 product_quantity_by_id[product_id] = product_quantity_by_id.get(product_id, 0) + (inventory.quantity or 0)
 

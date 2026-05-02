@@ -210,7 +210,8 @@ def manipulator_detail(request):
 		return JsonResponse({"error": "Invalid Manipulator ID format"}, status=400)
 
 	if request.method == "GET":
-		return JsonResponse({"status": manipulator.status, "position": str(manipulator.position.id)}, status=200)
+		position = str(manipulator.position.id) if manipulator.position else None
+		return JsonResponse({"status": manipulator.status, "position": position}, status=200)
 
 	if request.method == "PATCH":
 		try:
@@ -237,6 +238,7 @@ def manipulator_detail(request):
 				return JsonResponse({"error": "Invalid Storage location ID format"}, status=400)
 		
 		manipulator.save()
-		return JsonResponse({"status": manipulator.status, "position": str(manipulator.position.id)}, status=200)
+		position = str(manipulator.position.id) if manipulator.position else None
+		return JsonResponse({"status": manipulator.status, "position": position}, status=200)
 
 	return HttpResponseNotAllowed(["GET", "PATCH"])
