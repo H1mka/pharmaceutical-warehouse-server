@@ -5,6 +5,8 @@ from mongoengine.errors import DoesNotExist, ValidationError
 import datetime
 import json
 import random
+import numpy as np
+import pandas as pd
 
 # models
 from apps.inventory.models import Inventory
@@ -385,6 +387,217 @@ def product_to_dict(product: Product) -> dict:
         if product.updated_at
         else None,
     }
+
+# Analitics: analyze product/medicine popularity
+
+def _parse_analytics_datetime(value, field_name):
+    if not value:
+        return None
+
+    try:
+        parsed_value = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError(
+            f"Invalid '{field_name}' format. Use ISO format, for example 2026-05-02 or 2026-05-02T10:00:00"
+        )
+
+    if parsed_value.tzinfo:
+        parsed_value = parsed_value.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+
+    return parsed_value
+
+
+def _operation_logs_to_popularity_dataframe(logs):
+    rows = []
+
+    for log in logs:
+        product = log.product
+        if not product:
+            continue
+
+        rows.append(
+            {
+                "product_id": str(product.id),
+                "sku": product.sku,
+                "name": product.name,
+                "manufacturer": product.manufacturer,
+                "quantity": log.product_quantity or 0,
+                "created_at": log.created_at or datetime.datetime.utcnow(),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def _empty_product_popularity_response(start_date, end_date, limit, sort_by):
+    return {
+        "success": True,
+        "filters": {
+            "from": start_date.isoformat() if start_date else None,
+            "to": end_date.isoformat() if end_date else None,
+            "limit": limit,
+            "sort_by": sort_by,
+        },
+        "summary": {
+            "products_count": 0,
+            "dispense_count": 0,
+            "total_dispensed_quantity": 0,
+            "average_dispensed_quantity": 0,
+            "top_product": None,
+        },
+        "chart": {
+            "labels": [],
+            "datasets": [
+                {
+                    "label": "Dispensed quantity",
+                    "data": [],
+                }
+            ],
+        },
+        "items": [],
+    }
+
+
+@csrf_exempt
+def product_popularity_analytics(request):
+    """
+    GET /analytics/products/popularity
+
+    Query params:
+      from=ISO datetime/date
+      to=ISO datetime/date
+      limit=positive integer, default 10
+      sort_by=quantity|count
+    """
+    if request.method != "GET":
+        return HttpResponseNotAllowed(["GET"])
+
+    sort_by = request.GET.get("sort_by", "quantity")
+    if sort_by not in ["quantity", "count"]:
+        return JsonResponse(
+            {"success": False, "error": "Invalid sort_by. Use one of: quantity, count"},
+            status=400,
+        )
+
+    try:
+        limit = int(request.GET.get("limit", 10))
+    except ValueError:
+        return JsonResponse({"success": False, "error": "Invalid limit. Use a positive integer"}, status=400)
+
+    if limit <= 0:
+        return JsonResponse({"success": False, "error": "Invalid limit. Use a positive integer"}, status=400)
+
+    try:
+        start_date = _parse_analytics_datetime(request.GET.get("from"), "from")
+        end_date = _parse_analytics_datetime(request.GET.get("to"), "to")
+    except ValueError as e:
+        return JsonResponse({"success": False, "error": str(e)}, status=400)
+
+    if start_date and end_date and start_date > end_date:
+        return JsonResponse({"success": False, "error": "'from' cannot be later than 'to'"}, status=400)
+
+    query_filter = {"operation_type": "DISPENSE", "product__ne": None}
+    if start_date:
+        query_filter["created_at__gte"] = start_date
+    if end_date:
+        query_filter["created_at__lte"] = end_date
+
+    logs = list(OperationLogs.objects(**query_filter).order_by("created_at"))
+    if not logs:
+        return JsonResponse(_empty_product_popularity_response(start_date, end_date, limit, sort_by), status=200)
+
+    df = _operation_logs_to_popularity_dataframe(logs)
+    if df.empty:
+        return JsonResponse(_empty_product_popularity_response(start_date, end_date, limit, sort_by), status=200)
+
+    df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0).astype(int)
+
+    popularity = (
+        df.groupby(["product_id", "sku", "name", "manufacturer"], dropna=False)
+        .agg(
+            dispensed_quantity=("quantity", "sum"),
+            dispense_count=("quantity", "size"),
+            last_dispensed_at=("created_at", "max"),
+        )
+        .reset_index()
+    )
+
+    total_dispensed_quantity = int(np.sum(popularity["dispensed_quantity"].to_numpy()))
+    total_dispense_count = int(np.sum(popularity["dispense_count"].to_numpy()))
+    products_count = int(popularity["product_id"].nunique())
+    sort_column = "dispensed_quantity" if sort_by == "quantity" else "dispense_count"
+
+    popularity = popularity.sort_values(
+        by=[sort_column, "dispensed_quantity", "dispense_count", "name"],
+        ascending=[False, False, False, True],
+    ).head(limit)
+
+    items = []
+    for rank, (_, row) in enumerate(popularity.iterrows(), start=1):
+        dispensed_quantity = int(row["dispensed_quantity"])
+        dispense_count = int(row["dispense_count"])
+        items.append(
+            {
+                "rank": rank,
+                "product_id": row["product_id"],
+                "sku": row["sku"],
+                "name": row["name"],
+                "manufacturer": row["manufacturer"] if pd.notna(row["manufacturer"]) else None,
+                "dispensed_quantity": dispensed_quantity,
+                "dispense_count": dispense_count,
+                "quantity_share_percent": float(
+                    np.round((dispensed_quantity / total_dispensed_quantity) * 100, 2)
+                )
+                if total_dispensed_quantity
+                else 0,
+                "count_share_percent": float(np.round((dispense_count / total_dispense_count) * 100, 2))
+                if total_dispense_count
+                else 0,
+                "last_dispensed_at": row["last_dispensed_at"].isoformat()
+                if pd.notna(row["last_dispensed_at"])
+                else None,
+            }
+        )
+
+    top_product = items[0] if items else None
+
+    return JsonResponse(
+        {
+            "success": True,
+            "filters": {
+                "from": start_date.isoformat() if start_date else None,
+                "to": end_date.isoformat() if end_date else None,
+                "limit": limit,
+                "sort_by": sort_by,
+            },
+            "summary": {
+                "products_count": products_count,
+                "dispense_count": total_dispense_count,
+                "total_dispensed_quantity": total_dispensed_quantity,
+                "average_dispensed_quantity": float(
+                    np.round(total_dispensed_quantity / total_dispense_count, 2)
+                )
+                if total_dispense_count
+                else 0,
+                "top_product": top_product,
+            },
+            "chart": {
+                "labels": [item["name"] for item in items],
+                "datasets": [
+                    {
+                        "label": "Dispensed quantity",
+                        "data": [item["dispensed_quantity"] for item in items],
+                    },
+                    {
+                        "label": "Dispense operations",
+                        "data": [item["dispense_count"] for item in items],
+                    },
+                ],
+            },
+            "items": items,
+        },
+        status=200,
+    )
 
 
 @csrf_exempt
