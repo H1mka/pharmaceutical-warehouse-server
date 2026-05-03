@@ -3,7 +3,10 @@ from mongoengine import Document, StringField, IntField, DateTimeField, BooleanF
 import datetime
 
 class StorageLocation(Document):
+    location_type_list = ["STORAGE", "LOADING", "DELIVERY"]
+
     zone = StringField(required=True)
+    location_type = StringField(default="STORAGE", choices=location_type_list)
     row = IntField(required=True)
     column = IntField(required=True)
     capacity = IntField(required=True)
