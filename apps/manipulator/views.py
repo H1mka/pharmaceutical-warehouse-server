@@ -202,6 +202,7 @@ def logs_list_create(request):
 	return HttpResponseNotAllowed(["GET", "POST"])
 
 
+
 @csrf_exempt
 def log_detail(request, log_id: str):
 	"""

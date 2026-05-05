@@ -4,7 +4,6 @@ from .models import Product
 from mongoengine.errors import DoesNotExist, ValidationError
 import datetime
 import json
-import random
 
 from apps.inventory.models import Inventory
 from apps.storage_location.models import StorageLocation
@@ -19,9 +18,6 @@ def home(request):
 
 def _normalize_zone_name(zone):
     return (zone or "").strip().upper().replace("-", "_").replace(" ", "_")
-
-def generate_random_delay():
-    return random.uniform(5, 20) * 1000
 
 def _get_location_type(storage_location):
     location_type = getattr(storage_location, "location_type", None)
@@ -80,13 +76,8 @@ def _send_logs(logs_to_create):
                 return False, error_body or str(e), created_logs
     return True, "", created_logs
 
-
+# For emergency return of product to the place where it was taken from when two operations fail in a row
 def _handle_emergency_return(created_manipulator_logs, product):
-    """
-    Если операция прервана (ABORTED) из-за аппаратной ошибки, 
-    вычисляем, остался ли товар в клешне манипулятора, и генерируем
-    логи экстренного возврата без вызова основного эндпоинта.
-    """
     if not created_manipulator_logs:
         return
 
@@ -131,46 +122,6 @@ def _handle_emergency_return(created_manipulator_logs, product):
             manipulator.update(position=last_pick_loc)
 
 
-def _create_manipulator_logs(logs_to_create):
-    created_logs = []
-
-    try:
-        for log_data in logs_to_create:
-            storage_location = None
-            storage_location_id = log_data.get("storage_location")
-            if storage_location_id:
-                storage_location = StorageLocation.objects.get(id=storage_location_id)
-
-            product = None
-            product_id = log_data.get("product")
-            if product_id:
-                product = Product.objects.get(id=product_id)
-
-            manipulator_log = ManipulatorLog(
-                operation_status=log_data.get("operation_status", "SUCCESS"),
-                operation_type=log_data.get("operation_type"),
-                duration_ms=log_data.get("duration_ms"),
-                attempt=log_data.get("attempt"),
-                storage_location=storage_location,
-                product=product,
-                product_quantity=log_data.get("product_quantity"),
-                error_msg=log_data.get("error_msg"),
-            )
-            manipulator_log.save()
-            created_logs.append(manipulator_log)
-
-            manipulator = Manipulator.objects.first()
-            if manipulator and storage_location:
-                manipulator.position = storage_location
-                manipulator.save()
-    except Exception:
-        for log in reversed(created_logs):
-            log.delete()
-
-        raise
-
-    return created_logs
-
 
 def allocate_product_quantity(alloc_product: Product, quantity: int):
     # total_quantity = quantity
@@ -183,8 +134,6 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
     logs_to_create.append(
         {
             "operation_type": "PICK",
-            "duration_ms": generate_random_delay(),
-            "attempt": 1,
             "storage_location": str(loading_zone.id),
             "product": str(alloc_product.id),
             "product_quantity": remaining_quantity
@@ -222,8 +171,6 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
                 logs_to_create.append(
                     {
                         "operation_type": "MOVE",
-                        "duration_ms": generate_random_delay(),
-                        "attempt": 1,
                         "storage_location": str(loc.id),
                         "product": str(alloc_product.id),
                         "product_quantity": remaining_quantity
@@ -232,8 +179,6 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
                 logs_to_create.append(
                     {
                         "operation_type": "PUT",
-                        "duration_ms": generate_random_delay(),
-                        "attempt": 1,
                         "storage_location": str(loc.id),
                         "product": str(alloc_product.id),
                         "product_quantity": add_qty
@@ -270,8 +215,6 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
             logs_to_create.append(
                 {
                     "operation_type": "MOVE",
-                    "duration_ms": generate_random_delay(),
-                    "attempt": 1,
                     "storage_location": str(loc.id),
                     "product": str(alloc_product.id),
                     "product_quantity": remaining_quantity
@@ -280,8 +223,6 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
             logs_to_create.append(
                 {
                     "operation_type": "PUT",
-                    "duration_ms": generate_random_delay(),
-                    "attempt": 1,
                     "storage_location": str(loc.id),
                     "product": str(alloc_product.id),
                     "product_quantity": add_qty
@@ -348,8 +289,6 @@ def dispense_product_quantity(alloc_product: Product, quantity: int):
             logs_to_create.append(
                 {
                     "operation_type": "PICK",
-                    "duration_ms": generate_random_delay(),
-                    "attempt": 1,
                     "storage_location": str(loc.id),
                     "product": str(alloc_product.id),
                     "product_quantity": take_qty
@@ -358,8 +297,6 @@ def dispense_product_quantity(alloc_product: Product, quantity: int):
             logs_to_create.append(
                 {
                     "operation_type": "MOVE",
-                    "duration_ms": generate_random_delay(),
-                    "attempt": 1,
                     "storage_location": str(delivery_zone.id),
                     "product": str(alloc_product.id),
                     "product_quantity": take_qty
@@ -368,8 +305,6 @@ def dispense_product_quantity(alloc_product: Product, quantity: int):
             logs_to_create.append(
                 {
                     "operation_type": "PUT",
-                    "duration_ms": generate_random_delay(),
-                    "attempt": 1,
                     "storage_location": str(delivery_zone.id),
                     "product": str(alloc_product.id),
                     "product_quantity": take_qty
@@ -385,16 +320,16 @@ def dispense_product_quantity(alloc_product: Product, quantity: int):
         success = False
     else:
         try:
-            created_manipulator_logs = _create_manipulator_logs(logs_to_create)
-            created_operation_log = OperationLogs(
-                operation_type="DISPENSE",
-                product=alloc_product,
-                product_quantity=dispensed_quantity,
-                manipulator_task=created_manipulator_logs[-1] if created_manipulator_logs else None,
-                message=f"Dispensed {dispensed_quantity} units of product {alloc_product.sku}",
-            )
-            created_operation_log.save()
-            success, err_msg = True, ""
+            success, err_msg, created_manipulator_logs = _send_logs(logs_to_create)
+            if success:
+                created_operation_log = OperationLogs(
+                    operation_type="DISPENSE",
+                    product=alloc_product,
+                    product_quantity=dispensed_quantity,
+                    manipulator_task=created_manipulator_logs[-1] if created_manipulator_logs else None,
+                    message=f"Dispensed {dispensed_quantity} units of product {alloc_product.sku}",
+                )
+                created_operation_log.save()
         except Exception as e:
             success, err_msg = False, str(e)
 
@@ -415,8 +350,7 @@ def dispense_product_quantity(alloc_product: Product, quantity: int):
         if created_operation_log:
             created_operation_log.delete()
 
-        for log in reversed(created_manipulator_logs):
-            log.delete()
+        _handle_emergency_return(created_manipulator_logs, alloc_product)
 
         return False, err_msg
 
