@@ -6,7 +6,7 @@ from django.test import TestCase, Client
 
 #     def setUp(self):
 #         self.client = Client()
-#         Product.objects.delete()  # 🔥 чистим базу
+#         Product.objects.delete()  #  
 
 #     def test_create_product_success(self):
 #         response = self.client.post(
