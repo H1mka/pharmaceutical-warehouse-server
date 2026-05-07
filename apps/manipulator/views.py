@@ -1,5 +1,6 @@
 import random
 import json
+import random
 from datetime import datetime, time
 from django.http import JsonResponse, HttpResponseNotAllowed
 from django.views.decorators.csrf import csrf_exempt
@@ -125,52 +126,82 @@ def logs_list_create(request):
         if Manipulator.objects.first().status == "ON" and body.get("operation_type") == "START":
             return JsonResponse({"error": "Manipulator is already ON"}, status=400)
 
-        if body.get("operation_type") == "START":
-            Manipulator.objects.first().update(status="ON")
-        elif body.get("operation_type") == "STOP":
-            Manipulator.objects.first().update(status="OFF")
-
-        log = ManipulatorLog()
-        
-        log.operation_status = body.get("operation_status")
-        log.operation_type = body.get("operation_type")
-        
-        log.duration_ms = body.get("duration_ms")
-        log.attempt = body.get("attempt")
+		op_type = body.get("operation_type")
+		if op_type == "START":
+			Manipulator.objects.first().update(status="ON")
+		elif op_type == "STOP":
+			Manipulator.objects.first().update(status="OFF")
 
 
-        storage_location_id = body.get("storage_location")
-        if storage_location_id:
-            try:
-                storage_location = StorageLocation.objects.get(id=storage_location_id)
-                log.storage_location = storage_location
-                Manipulator.objects.first().update(position=storage_location)
-            except DoesNotExist:
-                return JsonResponse({"error": f"Storage location with id {storage_location_id} not found"}, status=400)
-            except ValidationError:
-                return JsonResponse({"error": "Invalid Storage location ID format"}, status=400)
-                
-        product_id = body.get("product")
-        if product_id:
-            try:
-                product = Product.objects.get(id=product_id)
-                log.product = product
-                log.product_quantity = body.get("product_quantity")
-            except DoesNotExist:
-                return JsonResponse({"error": f"Product with id {product_id} not found"}, status=400)
-            except ValidationError:
-                return JsonResponse({"error": "Invalid Product ID format"}, status=400)
+		storage_location_id = body.get("storage_location")
+		storage_location = None
+		if storage_location_id:
+			try:
+				storage_location = StorageLocation.objects.get(id=storage_location_id)
+				Manipulator.objects.first().update(position=storage_location)
+			except DoesNotExist:
+				return JsonResponse({"error": f"Storage location with id {storage_location_id} not found"}, status=400)
+			except ValidationError:
+				return JsonResponse({"error": "Invalid Storage location ID format"}, status=400)
+				
+		product_id = body.get("product")
+		product = None
+		product_quantity = body.get("product_quantity")
+		if product_id:
+			try:
+				product = Product.objects.get(id=product_id)
+			except DoesNotExist:
+				return JsonResponse({"error": f"Product with id {product_id} not found"}, status=400)
+			except ValidationError:
+				return JsonResponse({"error": "Invalid Product ID format"}, status=400)
 
-        log.error_msg = body.get("error_msg")
+		error_messages = {
+			"PICK": ["Failed to find storage location", "Failed to pick product", "Product weight mismatch"],
+			"PUT": ["Failed to find storage location", "Failed to put product", "Storage location obstructed", "Sensor read error"],
+			"MOVE": ["Failed to find storage location", "Failed to reach destination", "Path obstructed"],
+			"START": ["Failed to initialize system"],
+			"STOP": ["Failed to halt securely"]
+		}
 
-        try:
-            log.save()
-        except ValidationError as e:
-            return JsonResponse({"error": str(e)}, status=400)
+		def _create_log(status, duration, attempt_num, err_msg=None):
+			l = ManipulatorLog()
+			l.operation_type = op_type
+			l.operation_status = status
+			l.duration_ms = duration
+			l.attempt = attempt_num
+			l.error_msg = err_msg
+			if storage_location:
+				l.storage_location = storage_location
+			if product:
+				l.product = product
+				l.product_quantity = product_quantity
+			l.save()
+			return l
 
-        return JsonResponse(log_to_dict(log), status=201)
+		final_log = None
+
+		if op_type in ["START", "STOP"]:
+			final_log = _create_log("SUCCESS", random.randint(500, 2000), 1)
+		else:
+			attempt = 1
+			while attempt <= 2:
+				duration = random.randint(2500, 10000)
+				if duration > 9500:
+					err_msg = random.choice(error_messages.get(op_type, ["Unknown error"]))
+					if attempt == 2:
+						final_log = _create_log("ABORTED", duration, attempt, err_msg)
+						break
+					else:
+						_create_log("FAILURE", duration, attempt, err_msg)
+						attempt += 1
+				else:
+					final_log = _create_log("SUCCESS", duration, attempt)
+					break
+			
+		return JsonResponse(log_to_dict(final_log), status=201)
 
     return HttpResponseNotAllowed(["GET", "POST"])
+
 
 
 @csrf_exempt

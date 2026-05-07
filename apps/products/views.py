@@ -5,8 +5,9 @@ from mongoengine.errors import DoesNotExist, ValidationError
 import datetime
 import json
 import random
+import numpy as np
+import pandas as pd
 
-# models
 from apps.inventory.models import Inventory
 from apps.storage_location.models import StorageLocation
 from apps.manipulator.models import Manipulator, ManipulatorLog
@@ -20,9 +21,6 @@ def home(request):
 
 def _normalize_zone_name(zone):
     return (zone or "").strip().upper().replace("-", "_").replace(" ", "_")
-
-def generate_random_delay():
-    return random.uniform(5, 20) * 1000
 
 def _get_location_type(storage_location):
     location_type = getattr(storage_location, "location_type", None)
@@ -54,6 +52,7 @@ def _send_logs(logs_to_create):
     import urllib.request
     import urllib.error
     url = "http://127.0.0.1:8000/control-panel/logs"
+    created_logs = []
     for log_data in logs_to_create:
         req = urllib.request.Request(
             url, 
@@ -63,56 +62,68 @@ def _send_logs(logs_to_create):
         )
         try:
             with urllib.request.urlopen(req) as response:
-                pass
+                resp_body = response.read().decode('utf-8')
+                resp_json = json.loads(resp_body)
+                
+                log_doc = ManipulatorLog.objects.get(id=resp_json["id"])
+                created_logs.append(log_doc)
+
+                if resp_json.get("operation_status") == "ABORTED":
+                    return False, f"Manipulator hardware failure: {resp_json.get('error_msg')}", created_logs
         except urllib.error.URLError as e:
             error_body = e.read().decode('utf-8') if hasattr(e, 'read') else str(e)
             try:
                 err_dict = json.loads(error_body)
-                return False, err_dict.get("error", str(e))
+                return False, err_dict.get("error", str(e)), created_logs
             except Exception:
-                return False, error_body or str(e)
-    return True, ""
+                return False, error_body or str(e), created_logs
+    return True, "", created_logs
 
+# For emergency return of product to the place where it was taken from when two operations fail in a row
+def _handle_emergency_return(created_manipulator_logs, product):
+    if not created_manipulator_logs:
+        return
 
-def _create_manipulator_logs(logs_to_create):
-    created_logs = []
+    held_qty = 0
+    last_pick_loc = None
 
-    try:
-        for log_data in logs_to_create:
-            storage_location = None
-            storage_location_id = log_data.get("storage_location")
-            if storage_location_id:
-                storage_location = StorageLocation.objects.get(id=storage_location_id)
+    for log in created_manipulator_logs:
+        if log.operation_status == "SUCCESS":
+            if log.operation_type == "PICK":
+                held_qty += (log.product_quantity or 0)
+                last_pick_loc = log.storage_location
+            elif log.operation_type == "PUT":
+                held_qty -= (log.product_quantity or 0)
+    
+    if held_qty > 0 and last_pick_loc:
+        move_log = ManipulatorLog(
+            operation_type="MOVE",
+            operation_status="SUCCESS",
+            duration_ms=2000,
+            attempt=1,
+            storage_location=last_pick_loc,
+            product=product,
+            product_quantity=held_qty,
+            error_msg="Emergency return MOVE"
+        )
+        move_log.save()
+        
+        put_log = ManipulatorLog(
+            operation_type="PUT",
+            operation_status="SUCCESS",
+            duration_ms=2000,
+            attempt=1,
+            storage_location=last_pick_loc,
+            product=product,
+            product_quantity=held_qty,
+            error_msg="Emergency return PUT"
+        )
+        put_log.save()
 
-            product = None
-            product_id = log_data.get("product")
-            if product_id:
-                product = Product.objects.get(id=product_id)
+        manipulator = Manipulator.objects.first()
+        if manipulator:
+            manipulator.update(position=last_pick_loc)
 
-            manipulator_log = ManipulatorLog(
-                operation_status=log_data.get("operation_status", "SUCCESS"),
-                operation_type=log_data.get("operation_type"),
-                duration_ms=log_data.get("duration_ms"),
-                attempt=log_data.get("attempt"),
-                storage_location=storage_location,
-                product=product,
-                product_quantity=log_data.get("product_quantity"),
-                error_msg=log_data.get("error_msg"),
-            )
-            manipulator_log.save()
-            created_logs.append(manipulator_log)
-
-            manipulator = Manipulator.objects.first()
-            if manipulator and storage_location:
-                manipulator.position = storage_location
-                manipulator.save()
-    except Exception:
-        for log in reversed(created_logs):
-            log.delete()
-
-        raise
-
-    return created_logs
 
 
 def allocate_product_quantity(alloc_product: Product, quantity: int):
@@ -125,10 +136,7 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
 
     logs_to_create.append(
         {
-            "operation_status": "SUCCESS",
             "operation_type": "PICK",
-            "duration_ms": generate_random_delay(),
-            "attempt": 1,
             "storage_location": str(loading_zone.id),
             "product": str(alloc_product.id),
             "product_quantity": remaining_quantity
@@ -165,10 +173,7 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
 
                 logs_to_create.append(
                     {
-                        "operation_status": "SUCCESS",
                         "operation_type": "MOVE",
-                        "duration_ms": generate_random_delay(),
-                        "attempt": 1,
                         "storage_location": str(loc.id),
                         "product": str(alloc_product.id),
                         "product_quantity": remaining_quantity
@@ -176,10 +181,7 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
                 )
                 logs_to_create.append(
                     {
-                        "operation_status": "SUCCESS",
                         "operation_type": "PUT",
-                        "duration_ms": generate_random_delay(),
-                        "attempt": 1,
                         "storage_location": str(loc.id),
                         "product": str(alloc_product.id),
                         "product_quantity": add_qty
@@ -215,10 +217,7 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
 
             logs_to_create.append(
                 {
-                    "operation_status": "SUCCESS",
                     "operation_type": "MOVE",
-                    "duration_ms": generate_random_delay(),
-                    "attempt": 1,
                     "storage_location": str(loc.id),
                     "product": str(alloc_product.id),
                     "product_quantity": remaining_quantity
@@ -226,10 +225,7 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
             )
             logs_to_create.append(
                 {
-                    "operation_status": "SUCCESS",
                     "operation_type": "PUT",
-                    "duration_ms": generate_random_delay(),
-                    "attempt": 1,
                     "storage_location": str(loc.id),
                     "product": str(alloc_product.id),
                     "product_quantity": add_qty
@@ -242,16 +238,23 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
         err_msg = f"Not enough free storage capacity to place all product quantity. Unplaced quantity: {remaining_quantity}"
         success = False
     else:
-        success, err_msg = _send_logs(logs_to_create)
+        success, err_msg, _ = _send_logs(logs_to_create)
 
     if not success:
-        for item, old_qty, is_new in reversed(history):
+        success_put_count = sum(
+            1 for log in created_manipulator_logs 
+            if log.operation_type == "PUT" and log.operation_status == "SUCCESS"
+        )
+        history_to_revert = history[success_put_count:]
+        
+        for item, old_qty, is_new in reversed(history_to_revert):
             if is_new:
                 item.delete()
             else:
                 item.quantity = old_qty
                 item.save()
         
+        _handle_emergency_return(created_manipulator_logs, alloc_product)
 
         return False, err_msg
 
@@ -288,10 +291,7 @@ def dispense_product_quantity(alloc_product: Product, quantity: int):
 
             logs_to_create.append(
                 {
-                    "operation_status": "SUCCESS",
                     "operation_type": "PICK",
-                    "duration_ms": generate_random_delay(),
-                    "attempt": 1,
                     "storage_location": str(loc.id),
                     "product": str(alloc_product.id),
                     "product_quantity": take_qty
@@ -299,10 +299,7 @@ def dispense_product_quantity(alloc_product: Product, quantity: int):
             )
             logs_to_create.append(
                 {
-                    "operation_status": "SUCCESS",
                     "operation_type": "MOVE",
-                    "duration_ms": generate_random_delay(),
-                    "attempt": 1,
                     "storage_location": str(delivery_zone.id),
                     "product": str(alloc_product.id),
                     "product_quantity": take_qty
@@ -310,10 +307,7 @@ def dispense_product_quantity(alloc_product: Product, quantity: int):
             )
             logs_to_create.append(
                 {
-                    "operation_status": "SUCCESS",
                     "operation_type": "PUT",
-                    "duration_ms": generate_random_delay(),
-                    "attempt": 1,
                     "storage_location": str(delivery_zone.id),
                     "product": str(alloc_product.id),
                     "product_quantity": take_qty
@@ -329,21 +323,27 @@ def dispense_product_quantity(alloc_product: Product, quantity: int):
         success = False
     else:
         try:
-            created_manipulator_logs = _create_manipulator_logs(logs_to_create)
-            created_operation_log = OperationLogs(
-                operation_type="DISPENSE",
-                product=alloc_product,
-                product_quantity=dispensed_quantity,
-                manipulator_task=created_manipulator_logs[-1] if created_manipulator_logs else None,
-                message=f"Dispensed {dispensed_quantity} units of product {alloc_product.sku}",
-            )
-            created_operation_log.save()
-            success, err_msg = True, ""
+            success, err_msg, created_manipulator_logs = _send_logs(logs_to_create)
+            if success:
+                created_operation_log = OperationLogs(
+                    operation_type="DISPENSE",
+                    product=alloc_product,
+                    product_quantity=dispensed_quantity,
+                    manipulator_task=created_manipulator_logs[-1] if created_manipulator_logs else None,
+                    message=f"Dispensed {dispensed_quantity} units of product {alloc_product.sku}",
+                )
+                created_operation_log.save()
         except Exception as e:
             success, err_msg = False, str(e)
 
     if not success:
-        for item, old_qty, is_new in reversed(history):
+        success_put_count = sum(
+            1 for log in created_manipulator_logs 
+            if log.operation_type == "PUT" and log.operation_status == "SUCCESS"
+        )
+        history_to_revert = history[success_put_count:]
+
+        for item, old_qty, is_new in reversed(history_to_revert):
             if is_new:
                 item.delete()
             else:
@@ -353,8 +353,7 @@ def dispense_product_quantity(alloc_product: Product, quantity: int):
         if created_operation_log:
             created_operation_log.delete()
 
-        for log in reversed(created_manipulator_logs):
-            log.delete()
+        _handle_emergency_return(created_manipulator_logs, alloc_product)
 
         return False, err_msg
 
@@ -385,6 +384,217 @@ def product_to_dict(product: Product) -> dict:
         if product.updated_at
         else None,
     }
+
+# Analitics: analyze product/medicine popularity
+
+def _parse_analytics_datetime(value, field_name):
+    if not value:
+        return None
+
+    try:
+        parsed_value = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError(
+            f"Invalid '{field_name}' format. Use ISO format, for example 2026-05-02 or 2026-05-02T10:00:00"
+        )
+
+    if parsed_value.tzinfo:
+        parsed_value = parsed_value.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+
+    return parsed_value
+
+
+def _operation_logs_to_popularity_dataframe(logs):
+    rows = []
+
+    for log in logs:
+        product = log.product
+        if not product:
+            continue
+
+        rows.append(
+            {
+                "product_id": str(product.id),
+                "sku": product.sku,
+                "name": product.name,
+                "manufacturer": product.manufacturer,
+                "quantity": log.product_quantity or 0,
+                "created_at": log.created_at or datetime.datetime.utcnow(),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def _empty_product_popularity_response(start_date, end_date, limit, sort_by):
+    return {
+        "success": True,
+        "filters": {
+            "from": start_date.isoformat() if start_date else None,
+            "to": end_date.isoformat() if end_date else None,
+            "limit": limit,
+            "sort_by": sort_by,
+        },
+        "summary": {
+            "products_count": 0,
+            "dispense_count": 0,
+            "total_dispensed_quantity": 0,
+            "average_dispensed_quantity": 0,
+            "top_product": None,
+        },
+        "chart": {
+            "labels": [],
+            "datasets": [
+                {
+                    "label": "Dispensed quantity",
+                    "data": [],
+                }
+            ],
+        },
+        "items": [],
+    }
+
+
+@csrf_exempt
+def product_popularity_analytics(request):
+    """
+    GET /analytics/products/popularity
+
+    Query params:
+      from=ISO datetime/date
+      to=ISO datetime/date
+      limit=positive integer, default 10
+      sort_by=quantity|count
+    """
+    if request.method != "GET":
+        return HttpResponseNotAllowed(["GET"])
+
+    sort_by = request.GET.get("sort_by", "quantity")
+    if sort_by not in ["quantity", "count"]:
+        return JsonResponse(
+            {"success": False, "error": "Invalid sort_by. Use one of: quantity, count"},
+            status=400,
+        )
+
+    try:
+        limit = int(request.GET.get("limit", 10))
+    except ValueError:
+        return JsonResponse({"success": False, "error": "Invalid limit. Use a positive integer"}, status=400)
+
+    if limit <= 0:
+        return JsonResponse({"success": False, "error": "Invalid limit. Use a positive integer"}, status=400)
+
+    try:
+        start_date = _parse_analytics_datetime(request.GET.get("from"), "from")
+        end_date = _parse_analytics_datetime(request.GET.get("to"), "to")
+    except ValueError as e:
+        return JsonResponse({"success": False, "error": str(e)}, status=400)
+
+    if start_date and end_date and start_date > end_date:
+        return JsonResponse({"success": False, "error": "'from' cannot be later than 'to'"}, status=400)
+
+    query_filter = {"operation_type": "DISPENSE", "product__ne": None}
+    if start_date:
+        query_filter["created_at__gte"] = start_date
+    if end_date:
+        query_filter["created_at__lte"] = end_date
+
+    logs = list(OperationLogs.objects(**query_filter).order_by("created_at"))
+    if not logs:
+        return JsonResponse(_empty_product_popularity_response(start_date, end_date, limit, sort_by), status=200)
+
+    df = _operation_logs_to_popularity_dataframe(logs)
+    if df.empty:
+        return JsonResponse(_empty_product_popularity_response(start_date, end_date, limit, sort_by), status=200)
+
+    df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0).astype(int)
+
+    popularity = (
+        df.groupby(["product_id", "sku", "name", "manufacturer"], dropna=False)
+        .agg(
+            dispensed_quantity=("quantity", "sum"),
+            dispense_count=("quantity", "size"),
+            last_dispensed_at=("created_at", "max"),
+        )
+        .reset_index()
+    )
+
+    total_dispensed_quantity = int(np.sum(popularity["dispensed_quantity"].to_numpy()))
+    total_dispense_count = int(np.sum(popularity["dispense_count"].to_numpy()))
+    products_count = int(popularity["product_id"].nunique())
+    sort_column = "dispensed_quantity" if sort_by == "quantity" else "dispense_count"
+
+    popularity = popularity.sort_values(
+        by=[sort_column, "dispensed_quantity", "dispense_count", "name"],
+        ascending=[False, False, False, True],
+    ).head(limit)
+
+    items = []
+    for rank, (_, row) in enumerate(popularity.iterrows(), start=1):
+        dispensed_quantity = int(row["dispensed_quantity"])
+        dispense_count = int(row["dispense_count"])
+        items.append(
+            {
+                "rank": rank,
+                "product_id": row["product_id"],
+                "sku": row["sku"],
+                "name": row["name"],
+                "manufacturer": row["manufacturer"] if pd.notna(row["manufacturer"]) else None,
+                "dispensed_quantity": dispensed_quantity,
+                "dispense_count": dispense_count,
+                "quantity_share_percent": float(
+                    np.round((dispensed_quantity / total_dispensed_quantity) * 100, 2)
+                )
+                if total_dispensed_quantity
+                else 0,
+                "count_share_percent": float(np.round((dispense_count / total_dispense_count) * 100, 2))
+                if total_dispense_count
+                else 0,
+                "last_dispensed_at": row["last_dispensed_at"].isoformat()
+                if pd.notna(row["last_dispensed_at"])
+                else None,
+            }
+        )
+
+    top_product = items[0] if items else None
+
+    return JsonResponse(
+        {
+            "success": True,
+            "filters": {
+                "from": start_date.isoformat() if start_date else None,
+                "to": end_date.isoformat() if end_date else None,
+                "limit": limit,
+                "sort_by": sort_by,
+            },
+            "summary": {
+                "products_count": products_count,
+                "dispense_count": total_dispense_count,
+                "total_dispensed_quantity": total_dispensed_quantity,
+                "average_dispensed_quantity": float(
+                    np.round(total_dispensed_quantity / total_dispense_count, 2)
+                )
+                if total_dispense_count
+                else 0,
+                "top_product": top_product,
+            },
+            "chart": {
+                "labels": [item["name"] for item in items],
+                "datasets": [
+                    {
+                        "label": "Dispensed quantity",
+                        "data": [item["dispensed_quantity"] for item in items],
+                    },
+                    {
+                        "label": "Dispense operations",
+                        "data": [item["dispense_count"] for item in items],
+                    },
+                ],
+            },
+            "items": items,
+        },
+        status=200,
+    )
 
 
 @csrf_exempt
@@ -452,10 +662,10 @@ def products_list_create(request):
         print('POST METHOD', body)
 
         product = Product()
-        # required fields
+        
         product.sku = body.get("sku")
         product.name = body.get("name")
-        # optional fields
+        
         product.manufacturer = body.get("manufacturer")
         product.form = body.get("form")
         product.dosage = body.get("dosage")
@@ -464,7 +674,6 @@ def products_list_create(request):
 
         expiration_date = body.get("expiration_date")
         if expiration_date:
-            # wait for ISO string, for example "2025-12-31T00:00:00"
             try:
                 product.expiration_date = datetime.datetime.fromisoformat(
                     expiration_date
@@ -535,8 +744,6 @@ def product_detail(request, sku: str):
         except json.JSONDecodeError:
             return JsonResponse({"error": "Invalid JSON"}, status=400)
 
-        # For PUT we usually expect a full body, for PATCH we expect a partial body.
-        # Here we support both variants, updating only the received fields.
         updatable_fields = [
             "name",
             "manufacturer",
