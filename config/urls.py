@@ -102,6 +102,11 @@ urlpatterns = [
         operation_logs_views.dispense_load_analytics,
         name="dispense_load_analytics",
     ),
+    path(
+        "analytics/products/popularity",
+        products_views.product_popularity_analytics,
+        name="product_popularity_analytics",
+    ),
     
     # Auth endpoints
     path("auth/register", users_views.register, name="auth_register"),
