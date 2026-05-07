@@ -91,10 +91,10 @@ def login(request):
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
-    login = body.get("login")
+    username = body.get("username")
     password = body.get("password")
 
-    user = User.objects(username=login).first()
+    user = User.objects(username=username).first()
   
     if not user or not check_password(password, user.password):
       return JsonResponse({"message": "Invalid credentials"}, status=400)

@@ -23,7 +23,7 @@ def qr_scan(request):
     print("RAW QR:", raw_qr)
 
     # =========================
-    # 🔥 ПАРСИНГ
+    # ПАРСИНГ
     # =========================
     try:
         parsed = json.loads(raw_qr)
@@ -37,12 +37,12 @@ def qr_scan(request):
         data = parsed.get("data", {})
 
     except Exception as e:
-        print("❌ PARSE ERROR:", e)
+        print("PARSE ERROR:", e)
         sku = raw_qr
         data = None
 
     # =========================
-    # 🔍 ИЩЕМ ПРОДУКТ
+    # ИЩЕМ ПРОДУКТ
     # =========================
     product = Product.objects(sku=sku).first()
 
@@ -56,7 +56,7 @@ def qr_scan(request):
         })
 
     # =========================
-    # 🔥 ПРОВЕРКА ДАННЫХ
+    # ПРОВЕРКА ДАННЫХ
     # =========================
     required_fields = ["name", "manufacturer", "form", "dosage", "package_size"]
 
@@ -68,7 +68,7 @@ def qr_scan(request):
                 missing_fields.append(field)
 
     # =========================
-    # ❗ ЕСЛИ НЕ ХВАТАЕТ ДАННЫХ → ФОРМА
+    # ЕСЛИ НЕ ХВАТАЕТ ДАННЫХ → ФОРМА
     # =========================
     if data and missing_fields:
         return JsonResponse({
@@ -80,7 +80,7 @@ def qr_scan(request):
         })
 
     # =========================
-    # 🔥 ЕСЛИ ВСЕ ДАННЫЕ ЕСТЬ → СОЗДАЕМ
+    # ЕСЛИ ВСЕ ДАННЫЕ ЕСТЬ → СОЗДАЕМ
     # =========================
     if data:
         product = Product(
@@ -108,7 +108,7 @@ def qr_scan(request):
         })
 
     # =========================
-    # ❌ ТОЛЬКО SKU → ФОРМА
+    # ТОЛЬКО SKU → ФОРМА
     # =========================
     return JsonResponse({
         "found": False,
