@@ -41,8 +41,11 @@ class InventoryViewsTestCase(TestCase):
         item.last_movement_at = last_movement_at
         return item
 
+    # ==========================================
+    #      Тест 1: Перевіряємо легку серіалізацію товару, локації та руху.
+    # ==========================================
+
     def test_inventory_to_dict_serializes_related_fields(self):
-        # Перевіряємо легку серіалізацію товару, локації та руху.
         movement_at = datetime.datetime(2026, 5, 9, 12, 30, 0)
         item = self._inventory_item(last_movement_at=movement_at)
 
@@ -56,9 +59,13 @@ class InventoryViewsTestCase(TestCase):
         self.assertEqual(data["reserved"], 2)
         self.assertEqual(data["last_movement_at"], movement_at.isoformat())
 
+
+    # ==========================================
+    #      Тест 2: Дивимось, що список інвентарю повертається масивом.
+    # ==========================================
+
     @patch("apps.inventory.views.Inventory.objects")
     def test_inventory_list_get_returns_all_items(self, mock_inventory_objects):
-        # Дивимось, що список інвентарю повертається масивом.
         mock_inventory_objects.all.return_value = [
             self._inventory_item(item_id="inventory-1", quantity=12),
             self._inventory_item(item_id="inventory-2", quantity=5, reserved=0),
@@ -72,6 +79,11 @@ class InventoryViewsTestCase(TestCase):
         self.assertEqual(data[0]["id"], "inventory-1")
         self.assertEqual(data[1]["quantity"], 5)
 
+    
+    # ==========================================
+    #      Тест 3: Створюємо запис через SKU, щоб не вимагати product_id.
+    # ==========================================
+    
     @patch("apps.inventory.views.StorageLocation.objects")
     @patch("apps.inventory.views.Product.objects")
     @patch("apps.inventory.views.Inventory")
@@ -81,7 +93,6 @@ class InventoryViewsTestCase(TestCase):
         mock_product_objects,
         mock_storage_objects,
     ):
-        # Створюємо запис через SKU, щоб не вимагати product_id.
         product = self._product()
         storage_location = self._storage_location()
         created_item = self._inventory_item(
@@ -120,8 +131,12 @@ class InventoryViewsTestCase(TestCase):
         )
         created_item.save.assert_called_once()
 
+
+    # ==========================================
+    #      Тест 4: Невалідний JSON має повертати зрозумілу помилку.
+    # ==========================================
+
     def test_inventory_post_rejects_invalid_json(self):
-        # Невалідний JSON має повертати зрозумілу помилку.
         response = self.client.post(
             "/inventory",
             data="not-json",
@@ -131,8 +146,12 @@ class InventoryViewsTestCase(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"], "Invalid JSON")
 
+
+    # ==========================================
+    #      Тест 5: Кількість є обов'язковою для нового запису.
+    # ==========================================
+
     def test_inventory_post_requires_quantity(self):
-        # Кількість є обов'язковою для нового запису.
         response = self.client.post(
             "/inventory",
             data=json.dumps(
@@ -147,8 +166,12 @@ class InventoryViewsTestCase(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"], "Field 'quantity' is required")
 
+
+    # ==========================================
+    #      Тест 6: Без SKU або id товару запис створити не можна.
+    # ==========================================
+
     def test_inventory_post_requires_product_identifier(self):
-        # Без SKU або id товару запис створити не можна.
         response = self.client.post(
             "/inventory",
             data=json.dumps(
@@ -166,9 +189,13 @@ class InventoryViewsTestCase(TestCase):
             "Either 'product_id' or 'product_sku' is required",
         )
 
+
+    # ==========================================
+    #      Тест 7: Якщо товар не знайдено, віддаємо 404.
+    # ==========================================
+
     @patch("apps.inventory.views.Product.objects")
     def test_inventory_post_returns_404_for_missing_product(self, mock_product_objects):
-        # Якщо товар не знайдено, віддаємо 404.
         mock_product_objects.get.side_effect = DoesNotExist("Product not found")
 
         response = self.client.post(
@@ -186,6 +213,11 @@ class InventoryViewsTestCase(TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["error"], "Product not found")
 
+    
+    # ==========================================
+    #      Тест 8: Якщо локації нема, запис не створюється.
+    # ==========================================
+    
     @patch("apps.inventory.views.StorageLocation.objects")
     @patch("apps.inventory.views.Product.objects")
     def test_inventory_post_returns_404_for_missing_location(
@@ -193,7 +225,6 @@ class InventoryViewsTestCase(TestCase):
         mock_product_objects,
         mock_storage_objects,
     ):
-        # Якщо локації нема, запис не створюється.
         mock_product_objects.get.return_value = self._product()
         mock_storage_objects.get.side_effect = DoesNotExist("Location not found")
 
@@ -212,6 +243,11 @@ class InventoryViewsTestCase(TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["error"], "StorageLocation not found")
 
+
+    # ==========================================
+    #      Тест 9: Помилку валідації зберігання повертаємо як 400.
+    # ==========================================
+
     @patch("apps.inventory.views.StorageLocation.objects")
     @patch("apps.inventory.views.Product.objects")
     @patch("apps.inventory.views.Inventory")
@@ -221,7 +257,6 @@ class InventoryViewsTestCase(TestCase):
         mock_product_objects,
         mock_storage_objects,
     ):
-        # Помилку валідації зберігання повертаємо як 400.
         created_item = self._inventory_item(quantity=-1)
         created_item.save.side_effect = ValidationError("Bad inventory data")
         mock_product_objects.get.return_value = self._product()
@@ -243,9 +278,13 @@ class InventoryViewsTestCase(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("Bad inventory data", response.json()["error"])
 
+
+    # ==========================================
+    #      Тест 10: Детальна сторінка повертає один запис інвентарю.
+    # ==========================================
+
     @patch("apps.inventory.views.Inventory.objects")
     def test_inventory_detail_get_returns_item(self, mock_inventory_objects):
-        # Детальна сторінка повертає один запис інвентарю.
         mock_inventory_objects.get.return_value = self._inventory_item()
 
         response = self.client.get("/inventory/inventory-1")
@@ -253,9 +292,13 @@ class InventoryViewsTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["id"], "inventory-1")
 
+
+    # ==========================================
+    #      Тест 11: Нема запису - повертаємо простий 404.
+    # ==========================================
+
     @patch("apps.inventory.views.Inventory.objects")
     def test_inventory_detail_returns_404_when_missing(self, mock_inventory_objects):
-        # Нема запису - маємо простий 404.
         mock_inventory_objects.get.side_effect = DoesNotExist("Inventory not found")
 
         response = self.client.get("/inventory/missing")
@@ -263,12 +306,16 @@ class InventoryViewsTestCase(TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["error"], "Inventory not found")
 
+
+    # ==========================================
+    #      Тест 12: PATCH міняє тільки дозволені поля кількості.
+    # ==========================================
+
     @patch("apps.inventory.views.Inventory.objects")
     def test_inventory_detail_patch_updates_quantity_and_reserved(
         self,
         mock_inventory_objects,
     ):
-        # PATCH міняє тільки дозволені поля кількості.
         item = self._inventory_item(quantity=10, reserved=2)
         mock_inventory_objects.get.return_value = item
 
@@ -290,9 +337,13 @@ class InventoryViewsTestCase(TestCase):
         self.assertEqual(response.json()["quantity"], 7)
         item.save.assert_called_once()
 
+
+    # ==========================================
+    #      Тест 13: PATCH теж має ловити битий JSON.
+    # ==========================================
+
     @patch("apps.inventory.views.Inventory.objects")
     def test_inventory_detail_patch_rejects_invalid_json(self, mock_inventory_objects):
-        # PATCH теж має ловити битий JSON.
         mock_inventory_objects.get.return_value = self._inventory_item()
 
         response = self.client.patch(
@@ -304,9 +355,13 @@ class InventoryViewsTestCase(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"], "Invalid JSON")
 
+
+    # ==========================================
+    #      Тест 14: Видалення викликає delete у знайденого запису.
+    # ==========================================
+
     @patch("apps.inventory.views.Inventory.objects")
     def test_inventory_detail_delete_removes_item(self, mock_inventory_objects):
-        # Видалення викликає delete у знайденого запису.
         item = self._inventory_item()
         mock_inventory_objects.get.return_value = item
 
