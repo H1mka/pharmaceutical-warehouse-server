@@ -1,5 +1,7 @@
 import json
 import random
+import threading
+import time as time_module
 from datetime import datetime, time
 from django.http import JsonResponse, HttpResponseNotAllowed
 from django.views.decorators.csrf import csrf_exempt
@@ -8,22 +10,26 @@ from mongoengine.errors import DoesNotExist, ValidationError
 from apps.manipulator.models import ManipulatorLog, Manipulator
 from apps.products.models import Product
 from apps.storage_location.models import StorageLocation
-from utils.pagination_helper import generate_pagination
 
+from utils.pagination_helper import generate_pagination
+from .mqtt_client import publish_manipulator_state
+
+
+manipulator_lock = threading.Lock()
 
 def log_to_dict(log: ManipulatorLog) -> dict:
 	"""
 	Utility to serialize ManipulatorLog to dict for JSON response.
 	"""
 	try:
-		product_id = str(log.product.id) if log.product else None
+		product_name = log.product.name if log.product else None
 	except Exception:
-		product_id = "Deleted Product"
+		product_name = "Deleted Product"
 
 	try:
-		location_id = str(log.storage_location.id) if log.storage_location else None
+		location_name = _get_pretty_position_name(log.storage_location) if log.storage_location else None
 	except Exception:
-		location_id = "Deleted Location"
+		location_name = "Deleted Location"
 
 	return {
 		"id": str(log.id),
@@ -36,12 +42,138 @@ def log_to_dict(log: ManipulatorLog) -> dict:
 		"duration_ms": log.duration_ms,
 		"attempt": log.attempt,
 
-		"storage_location": location_id,
-		"product": product_id,
+		"storage_location": location_name,
+		"product": product_name,
 		"product_quantity": log.product_quantity if log.product_quantity else None,
 
 		"error_msg": log.error_msg,
 	}
+
+def _get_pretty_position_name(storage_location):
+	return f"{storage_location.zone} - {storage_location.row} - {storage_location.column}"
+
+def _execute_manipulator_task(op_type, storage_location=None, product=None, product_quantity=None):
+	with manipulator_lock:
+		return _execute_manipulator_task_internal(op_type, storage_location, product, product_quantity)
+
+def _execute_manipulator_task_internal(op_type, storage_location=None, product=None, product_quantity=None):
+	manipulator = Manipulator.objects.first()
+	
+	if not manipulator:
+		raise ValueError("Manipulator not found")
+
+	if manipulator.status == "OFF" and op_type != "START":
+		raise ValueError("Manipulator is OFF. Cannot perform operations.")
+	
+	loc_name = _get_pretty_position_name(storage_location) if storage_location else None
+
+	error_messages = {
+		"PICK": 	[f"Failed to find storage location {loc_name}", f"Failed to pick product from storage location {loc_name}", "Product weight mismatch", "Path obstructed to storage location"],
+		"PUT": 		[f"Failed to find storage location {loc_name}", f"Failed to put product to storage location {loc_name}", f"Storage location {loc_name} obstructed", "Sensor read error"],
+		"MOVE": 	[f"Failed to find storage location {loc_name}", f"Failed to reach destination {loc_name}", f"Path obstructed to storage location {loc_name}"],
+	}
+
+	operation_messages = {
+		"PICK": 	[f"Trying to pick up product from storage location {loc_name}", "Waiting..."],
+		"PUT": 		[f"Trying to put product to storage location {loc_name}", "Waiting..."],
+		"MOVE": 	[f"Trying to move to storage location {loc_name}", "Waiting..."],
+		"START": 	["Powering on manipulator", "Waiting..."],
+		"STOP": 	["Powering off manipulator", "Offline"]
+	}
+
+	current_operation = operation_messages.get(op_type, ["Unknown"])
+
+	def _create_log(status, duration, attempt_num, err_msg=None):
+		l = ManipulatorLog()
+		l.operation_type = op_type
+		l.operation_status = status
+		l.duration_ms = duration
+		l.attempt = attempt_num
+		l.error_msg = err_msg
+		if storage_location:
+			l.storage_location = storage_location
+		if product:
+			l.product = product
+			l.product_quantity = product_quantity
+		l.save()
+		from apps.manipulator.mqtt_client import publish_new_log
+		publish_new_log(log_to_dict(l))
+		return l
+
+	final_log = None
+
+	if op_type in ["START", "STOP"]:
+		new_status = "ON" if op_type == "START" else "OFF"
+		
+		publish_manipulator_state(
+			manipulator.status,
+			_get_pretty_position_name(manipulator.position) if manipulator.position else None,
+			current_operation=current_operation[0]
+		)
+		
+		time_module.sleep(1)
+		
+		final_log = _create_log("SUCCESS", 1000, 1)
+		manipulator.update(status=new_status)
+	else:
+		attempt = 1
+		while attempt <= 2:
+			duration = random.randint(1500, 5000)
+			
+			publish_manipulator_state(
+				manipulator.status,
+				_get_pretty_position_name(manipulator.position) if manipulator.position else None,
+				current_operation=f"{current_operation[0]} (Attempt {attempt})"
+			)
+
+			time_module.sleep(duration / 1000.0)
+			
+			if duration > 4500:
+				err_msg = random.choice(error_messages.get(op_type, ["Unknown error"]))
+				_create_log("FAILURE", duration, attempt, err_msg)
+
+				attempt += 1
+				if attempt > 2:
+					final_log = _create_log("ABORTED", duration, attempt, err_msg)
+
+					publish_manipulator_state(
+						manipulator.status,
+						_get_pretty_position_name(manipulator.position) if manipulator.position else None,
+						current_operation=f"{current_operation[0]} (ABORTED)"
+					)
+
+					time_module.sleep(1)
+					break
+
+				publish_manipulator_state(
+					manipulator.status,
+					_get_pretty_position_name(manipulator.position) if manipulator.position else None,
+					current_operation=f"{current_operation[0]} (FAILURE)"
+				)
+
+				time_module.sleep(1)
+			else:
+				final_log = _create_log("SUCCESS", duration, attempt)
+
+				manipulator.update(position=storage_location)
+				manipulator.reload()
+				publish_manipulator_state(
+					manipulator.status,
+					_get_pretty_position_name(manipulator.position) if manipulator.position else None,
+					current_operation=f"{current_operation[0]} (SUCCESS)"
+				)
+
+				time_module.sleep(1)
+				break
+	
+	manipulator.reload()
+	publish_manipulator_state(
+		manipulator.status,
+		_get_pretty_position_name(manipulator.position) if manipulator.position else None,
+		current_operation=current_operation[1]
+	)
+
+	return final_log
 
 
 @csrf_exempt
@@ -119,33 +251,37 @@ def logs_list_create(request):
 		except json.JSONDecodeError:
 			return JsonResponse({"error": "Invalid JSON"}, status=400)
 
-		if Manipulator.objects.first().status == "OFF" and body.get("operation_type") != "START":
+		try:
+			manipulator = Manipulator.objects.first()
+		except DoesNotExist:
+			return JsonResponse({"error": "Manipulator not found"}, status=404)
+
+		if manipulator.status == "OFF" and body.get("operation_type") != "START":
 			return JsonResponse({"error": "Manipulator is OFF"}, status=400)
 
-		if Manipulator.objects.first().status == "ON" and body.get("operation_type") == "START":
+		if manipulator.status == "ON" and body.get("operation_type") == "START":
 			return JsonResponse({"error": "Manipulator is already ON"}, status=400)
 
 		op_type = body.get("operation_type")
-		if op_type == "START":
-			Manipulator.objects.first().update(status="ON")
-		elif op_type == "STOP":
-			Manipulator.objects.first().update(status="OFF")
-
 
 		storage_location_id = body.get("storage_location")
 		storage_location = None
+		loc_name = None
+
+		product_quantity = body.get("product_quantity")
+		product_id = body.get("product")
+		product = None
+
+
 		if storage_location_id:
 			try:
 				storage_location = StorageLocation.objects.get(id=storage_location_id)
-				Manipulator.objects.first().update(position=storage_location)
+				loc_name = _get_pretty_position_name(storage_location)
 			except DoesNotExist:
 				return JsonResponse({"error": f"Storage location with id {storage_location_id} not found"}, status=400)
 			except ValidationError:
 				return JsonResponse({"error": "Invalid Storage location ID format"}, status=400)
 				
-		product_id = body.get("product")
-		product = None
-		product_quantity = body.get("product_quantity")
 		if product_id:
 			try:
 				product = Product.objects.get(id=product_id)
@@ -154,50 +290,12 @@ def logs_list_create(request):
 			except ValidationError:
 				return JsonResponse({"error": "Invalid Product ID format"}, status=400)
 
-		error_messages = {
-			"PICK": ["Failed to find storage location", "Failed to pick product", "Product weight mismatch"],
-			"PUT": ["Failed to find storage location", "Failed to put product", "Storage location obstructed", "Sensor read error"],
-			"MOVE": ["Failed to find storage location", "Failed to reach destination", "Path obstructed"],
-			"START": ["Failed to initialize system"],
-			"STOP": ["Failed to halt securely"]
-		}
+		def run_operation():
+			_execute_manipulator_task(op_type, storage_location, product, product_quantity)
 
-		def _create_log(status, duration, attempt_num, err_msg=None):
-			l = ManipulatorLog()
-			l.operation_type = op_type
-			l.operation_status = status
-			l.duration_ms = duration
-			l.attempt = attempt_num
-			l.error_msg = err_msg
-			if storage_location:
-				l.storage_location = storage_location
-			if product:
-				l.product = product
-				l.product_quantity = product_quantity
-			l.save()
-			return l
-
-		final_log = None
-
-		if op_type in ["START", "STOP"]:
-			final_log = _create_log("SUCCESS", random.randint(500, 2000), 1)
-		else:
-			attempt = 1
-			while attempt <= 2:
-				duration = random.randint(2500, 10000)
-				if duration > 9500:
-					err_msg = random.choice(error_messages.get(op_type, ["Unknown error"]))
-					if attempt == 2:
-						final_log = _create_log("ABORTED", duration, attempt, err_msg)
-						break
-					else:
-						_create_log("FAILURE", duration, attempt, err_msg)
-						attempt += 1
-				else:
-					final_log = _create_log("SUCCESS", duration, attempt)
-					break
-			
-		return JsonResponse(log_to_dict(final_log), status=201)
+		threading.Thread(target=run_operation).start()
+		
+		return JsonResponse({"message": "Operation started in background"}, status=202)
 
 	return HttpResponseNotAllowed(["GET", "POST"])
 
@@ -241,8 +339,8 @@ def manipulator_detail(request):
 		return JsonResponse({"error": "Invalid Manipulator ID format"}, status=400)
 
 	if request.method == "GET":
-		position = str(manipulator.position.id) if manipulator.position else None
-		return JsonResponse({"status": manipulator.status, "position": position}, status=200)
+		position = _get_pretty_position_name(manipulator.position)
+		return JsonResponse({"status": manipulator.status, "position": position})
 
 	if request.method == "PATCH":
 		try:
@@ -256,8 +354,10 @@ def manipulator_detail(request):
 		status = body.get("status")
 		position = body.get("position")
 		
-		if status:
+		if status and status in ["ON", "OFF"]:
 			manipulator.status = status
+		elif status:
+			return JsonResponse({"error": "Invalid status. Must be ON or OFF"}, status=400)
 		
 		if position:
 			try:
@@ -269,7 +369,7 @@ def manipulator_detail(request):
 				return JsonResponse({"error": "Invalid Storage location ID format"}, status=400)
 		
 		manipulator.save()
-		position = str(manipulator.position.id) if manipulator.position else None
+		position = _get_pretty_position_name(manipulator.position)
 		return JsonResponse({"status": manipulator.status, "position": position}, status=200)
 
 	return HttpResponseNotAllowed(["GET", "PATCH"])

@@ -20,12 +20,15 @@ class ManipulatorViewsTestCase(TestCase):
         mock_manipulator = MagicMock()
         mock_manipulator.status = "ON"
         mock_manipulator.position.id = "60b9c0282b8a9b23b4998765"
+        mock_manipulator.position.zone = "A"
+        mock_manipulator.position.row = "1"
+        mock_manipulator.position.column = "1"
         mock_manipulator_objects.first.return_value = mock_manipulator
 
         response = self.client.get('/control-panel/manipulator-state')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['status'], "ON")
-        self.assertEqual(response.json()['position'], "60b9c0282b8a9b23b4998765")
+        self.assertEqual(response.json()['position'], "A - 1 - 1")
 
     @patch('apps.manipulator.views.Manipulator.objects')
     def test_manipulator_detail_get_not_found(self, mock_manipulator_objects):
@@ -37,19 +40,24 @@ class ManipulatorViewsTestCase(TestCase):
         response = self.client.get('/control-panel/manipulator-state')
         self.assertEqual(response.status_code, 404)
 
+    @patch('apps.manipulator.views.publish_manipulator_state')
     @patch('apps.manipulator.views.StorageLocation.objects')
     @patch('apps.manipulator.views.Manipulator.objects')
-    def test_manipulator_detail_patch_success(self, mock_manipulator_objects, mock_storage_objects):
+    def test_manipulator_detail_patch_success(self, mock_manipulator_objects, mock_storage_objects, mock_publish):
         """
         Перевіряє успішне оновлення (PATCH) статусу та позиції маніпулятора.
         Підміняє запити для знаходження локації за ID та зберігає нові дані.
         """
         mock_manipulator = MagicMock()
         mock_manipulator.status = "OFF"
+        mock_manipulator.current_task = None
         mock_manipulator_objects.first.return_value = mock_manipulator
 
         mock_location = MagicMock()
         mock_location.id = "new_location_id"
+        mock_location.zone = "B"
+        mock_location.row = "2"
+        mock_location.column = "2"
         mock_storage_objects.get.return_value = mock_location
 
         patch_data = {"status": "ON", "position": "new_location_id"}
@@ -60,47 +68,45 @@ class ManipulatorViewsTestCase(TestCase):
         self.assertEqual(mock_manipulator.position, mock_location)
         mock_manipulator.save.assert_called_once()
 
+    @patch('apps.manipulator.views._execute_manipulator_task')
+    @patch('apps.manipulator.views.publish_manipulator_state')
     @patch('apps.manipulator.views.Manipulator.objects')
-    @patch('apps.manipulator.views.random.randint')
-    def test_logs_list_create_post_success(self, mock_randint, mock_manipulator_objects):
+    def test_logs_list_create_post_success(self, mock_manipulator_objects, mock_publish, mock_execute):
         """
-        Перевіряє успішне створення нового логу маніпулятора (POST /control-panel/logs/), 
-        коли генератор випадкових чисел повертає час виконання < 8500 мс (SUCCESS).
+        Перевіряє успішне створення нового логу маніпулятора (POST /control-panel/logs/).
+        Очікується статус 202 (Accepted).
         """
         mock_manipulator = MagicMock()
         mock_manipulator.status = "ON"
+        mock_manipulator.current_task = None
         mock_manipulator_objects.first.return_value = mock_manipulator
-
-        # Мокуємо random, щоб перша ж спроба повернула 3000 мс (успіх)
-        mock_randint.return_value = 3000
         
         log_data = {"operation_type": "MOVE"}
         
         response = self.client.post('/control-panel/logs/', data=json.dumps(log_data), content_type='application/json')
-        self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.json()['operation_status'], "SUCCESS")
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()['message'], "Operation started in background")
+        mock_execute.assert_called_once()
 
+    @patch('apps.manipulator.views._execute_manipulator_task')
+    @patch('apps.manipulator.views.publish_manipulator_state')
     @patch('apps.manipulator.views.Manipulator.objects')
-    @patch('apps.manipulator.views.random.randint')
-    def test_logs_list_create_post_failure_and_abort(self, mock_randint, mock_manipulator_objects):
+    def test_logs_list_create_post_failure_and_abort(self, mock_manipulator_objects, mock_publish, mock_execute):
         """
-        Перевіряє сценарій, коли маніпулятор двічі стикається з помилкою (> 9500 мс).
-        Очікується створення логу ABORTED.
+        Перевіряє сценарій POST запиту для створення логу.
+        Очікується статус 202 (Accepted).
         """
         mock_manipulator = MagicMock()
         mock_manipulator.status = "ON"
+        mock_manipulator.current_task = None
         mock_manipulator_objects.first.return_value = mock_manipulator
-
-        # Мокуємо random, щоб усі спроби повертали 9900 мс (помилка)
-        mock_randint.return_value = 9900
 
         log_data = {"operation_type": "MOVE"}
         
         response = self.client.post('/control-panel/logs/', data=json.dumps(log_data), content_type='application/json')
         
-        # Навіть при помилці, ендпоінт повертає 201, оскільки логи створено успішно
-        self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.json()['operation_status'], "ABORTED")
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()['message'], "Operation started in background")
 
     @patch('apps.manipulator.views.Manipulator.objects')
     def test_logs_list_create_post_manipulator_off(self, mock_manipulator_objects):
@@ -109,6 +115,7 @@ class ManipulatorViewsTestCase(TestCase):
         """
         mock_manipulator = MagicMock()
         mock_manipulator.status = "OFF"
+        mock_manipulator.current_task = None
         mock_manipulator_objects.first.return_value = mock_manipulator
 
         log_data = {"operation_type": "MOVE"}
@@ -124,6 +131,55 @@ class ManipulatorViewsTestCase(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"], "Invalid JSON")
 
+    @patch('apps.manipulator.mqtt_client.publish_new_log')
+    @patch('apps.manipulator.views.publish_manipulator_state')
+    @patch('apps.manipulator.views.ManipulatorLog')
+    @patch('apps.manipulator.views.Manipulator.objects')
+    @patch('apps.manipulator.views.random.randint')
+    @patch('apps.manipulator.views.time_module.sleep')
+    def test_execute_manipulator_task_direct_success(self, mock_sleep, mock_randint, mock_manipulator_objects, mock_log_class, mock_publish_state, mock_publish_log):
+        """
+        Прямий тест логіки створення логів без фонових потоків.
+        Мокує ManipulatorLog, щоб уникнути запису в реальну БД.
+        """
+        mock_manipulator = MagicMock()
+        mock_manipulator.status = "ON"
+        mock_manipulator_objects.first.return_value = mock_manipulator
+        
+        mock_randint.return_value = 3000
+        
+        from apps.manipulator.views import _execute_manipulator_task
+        final_log = _execute_manipulator_task("MOVE")
+        
+        self.assertTrue(mock_log_class.return_value.save.called)
+        
+        self.assertTrue(mock_publish_state.called)
+        self.assertTrue(mock_publish_log.called)
+
+    @patch('apps.manipulator.mqtt_client.publish_new_log')
+    @patch('apps.manipulator.views.publish_manipulator_state')
+    @patch('apps.manipulator.views.ManipulatorLog')
+    @patch('apps.manipulator.views.Manipulator.objects')
+    @patch('apps.manipulator.views.random.randint')
+    @patch('apps.manipulator.views.time_module.sleep')
+    def test_execute_manipulator_task_direct_failure(self, mock_sleep, mock_randint, mock_manipulator_objects, mock_log_class, mock_publish_state, mock_publish_log):
+        """
+        Тест на симуляцію помилки та статус ABORTED.
+        """
+        mock_manipulator = MagicMock()
+        mock_manipulator.status = "ON"
+        mock_manipulator_objects.first.return_value = mock_manipulator
+        
+        mock_randint.return_value = 9900
+        
+        from apps.manipulator.views import _execute_manipulator_task
+        final_log = _execute_manipulator_task("MOVE")
+        
+        self.assertTrue(mock_log_class.return_value.save.called)
+    
+        self.assertGreater(mock_publish_state.call_count, 1)
+        self.assertTrue(mock_publish_log.called)
+
     @patch('apps.manipulator.views.StorageLocation.objects')
     @patch('apps.manipulator.views.Manipulator.objects')
     def test_logs_list_create_post_invalid_location(self, mock_manipulator_objects, mock_storage_objects):
@@ -132,9 +188,9 @@ class ManipulatorViewsTestCase(TestCase):
         """
         mock_manipulator = MagicMock()
         mock_manipulator.status = "ON"
+        mock_manipulator.current_task = None
         mock_manipulator_objects.first.return_value = mock_manipulator
         
-        # Мокуємо виняток від бази даних
         mock_storage_objects.get.side_effect = DoesNotExist("Location not found")
 
         log_data = {"operation_type": "MOVE", "storage_location": "bad_id"}
@@ -151,6 +207,7 @@ class ManipulatorViewsTestCase(TestCase):
         """
         mock_manipulator = MagicMock()
         mock_manipulator.status = "ON"
+        mock_manipulator.current_task = None
         mock_manipulator_objects.first.return_value = mock_manipulator
         
         mock_product_objects.get.side_effect = DoesNotExist("Product not found")
@@ -183,7 +240,6 @@ class ManipulatorViewsTestCase(TestCase):
         mock_log.product_quantity = 0
         mock_log.max_attempts = 2
         
-        # Mocking objects().order_by().skip().limit()
         mock_qs.order_by.return_value.skip.return_value.limit.return_value = [mock_log]
         
         mock_log_objects.return_value = mock_qs

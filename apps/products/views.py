@@ -46,34 +46,21 @@ def _get_special_storage_location(location_type):
 
 
 def _send_logs(logs_to_create):
-    import urllib.request
-    import urllib.error
-    url = "http://127.0.0.1:8000/control-panel/logs"
+    from apps.manipulator.views import _execute_manipulator_task
     created_logs = []
     for log_data in logs_to_create:
-        req = urllib.request.Request(
-            url, 
-            data=json.dumps(log_data).encode('utf-8'), 
-            headers={'Content-Type': 'application/json'}, 
-            method='POST'
-        )
         try:
-            with urllib.request.urlopen(req) as response:
-                resp_body = response.read().decode('utf-8')
-                resp_json = json.loads(resp_body)
-                
-                log_doc = ManipulatorLog.objects.get(id=resp_json["id"])
-                created_logs.append(log_doc)
-
-                if resp_json.get("operation_status") == "ABORTED":
-                    return False, f"Manipulator hardware failure: {resp_json.get('error_msg')}", created_logs
-        except urllib.error.URLError as e:
-            error_body = e.read().decode('utf-8') if hasattr(e, 'read') else str(e)
-            try:
-                err_dict = json.loads(error_body)
-                return False, err_dict.get("error", str(e)), created_logs
-            except Exception:
-                return False, error_body or str(e), created_logs
+            final_log = _execute_manipulator_task(
+                op_type=log_data.get("operation_type"),
+                storage_location=log_data.get("storage_location"),
+                product=log_data.get("product"),
+                product_quantity=log_data.get("product_quantity")
+            )
+            created_logs.append(final_log)
+            if final_log and final_log.operation_status == "ABORTED":
+                return False, f"Manipulator hardware failure: {final_log.error_msg}", created_logs
+        except Exception as e:
+            return False, str(e), created_logs
     return True, "", created_logs
 
 # For emergency return of product to the place where it was taken from when two operations fail in a row
@@ -130,12 +117,21 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
     remaining_quantity = quantity
     logs_to_create = []
     history = []
+    
+    logs_to_create.append(
+        {
+            "operation_type": "MOVE",
+            "storage_location": loading_zone,
+            "product": None,
+            "product_quantity": None
+        }
+    )
 
     logs_to_create.append(
         {
             "operation_type": "PICK",
-            "storage_location": str(loading_zone.id),
-            "product": str(alloc_product.id),
+            "storage_location": loading_zone,
+            "product": alloc_product,
             "product_quantity": remaining_quantity
         }
     )
@@ -171,16 +167,16 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
                 logs_to_create.append(
                     {
                         "operation_type": "MOVE",
-                        "storage_location": str(loc.id),
-                        "product": str(alloc_product.id),
+                        "storage_location": loc,
+                        "product": alloc_product,
                         "product_quantity": remaining_quantity
                     }
                 )
                 logs_to_create.append(
                     {
                         "operation_type": "PUT",
-                        "storage_location": str(loc.id),
-                        "product": str(alloc_product.id),
+                        "storage_location": loc,
+                        "product": alloc_product,
                         "product_quantity": add_qty
                     }
                 )
@@ -215,16 +211,16 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
             logs_to_create.append(
                 {
                     "operation_type": "MOVE",
-                    "storage_location": str(loc.id),
-                    "product": str(alloc_product.id),
+                    "storage_location": loc,
+                    "product": alloc_product,
                     "product_quantity": remaining_quantity
                 }
             )
             logs_to_create.append(
                 {
                     "operation_type": "PUT",
-                    "storage_location": str(loc.id),
-                    "product": str(alloc_product.id),
+                    "storage_location": loc,
+                    "product": alloc_product,
                     "product_quantity": add_qty
                 }
             )
@@ -235,12 +231,12 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
         err_msg = f"Not enough free storage capacity to place all product quantity. Unplaced quantity: {remaining_quantity}"
         success = False
     else:
-        success, err_msg, _ = _send_logs(logs_to_create)
+        success, err_msg, created_logs = _send_logs(logs_to_create)
 
     if not success:
         success_put_count = sum(
-            1 for log in created_manipulator_logs 
-            if log.operation_type == "PUT" and log.operation_status == "SUCCESS"
+            1 for log in created_logs
+            if log and log.operation_type == "PUT" and log.operation_status == "SUCCESS"
         )
         history_to_revert = history[success_put_count:]
         
@@ -251,7 +247,7 @@ def allocate_product_quantity(alloc_product: Product, quantity: int):
                 item.quantity = old_qty
                 item.save()
         
-        _handle_emergency_return(created_manipulator_logs, alloc_product)
+        _handle_emergency_return(created_logs, alloc_product)
 
         return False, err_msg
 
@@ -288,25 +284,33 @@ def dispense_product_quantity(alloc_product: Product, quantity: int):
 
             logs_to_create.append(
                 {
+                    "operation_type": "MOVE",
+                    "storage_location": loc,
+                    "product": None,
+                    "product_quantity": None
+                }
+            )
+            logs_to_create.append(
+                {
                     "operation_type": "PICK",
-                    "storage_location": str(loc.id),
-                    "product": str(alloc_product.id),
+                    "storage_location": loc,
+                    "product": alloc_product,
                     "product_quantity": take_qty
                 }
             )
             logs_to_create.append(
                 {
                     "operation_type": "MOVE",
-                    "storage_location": str(delivery_zone.id),
-                    "product": str(alloc_product.id),
+                    "storage_location": delivery_zone,
+                    "product": alloc_product,
                     "product_quantity": take_qty
                 }
             )
             logs_to_create.append(
                 {
                     "operation_type": "PUT",
-                    "storage_location": str(delivery_zone.id),
-                    "product": str(alloc_product.id),
+                    "storage_location": delivery_zone,
+                    "product": alloc_product,
                     "product_quantity": take_qty
                 }
             )
