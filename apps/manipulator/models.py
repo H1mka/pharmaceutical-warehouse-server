@@ -5,8 +5,8 @@ from datetime import datetime
 
 
 class Manipulator(Document):
-    status = StringField(default='OFF', required=True, choices=["OFF", "ON", "BUSY", "WAITING"])
-    position = ReferenceField(StorageLocation, null=True)
+    status = StringField(default='OFF', required=True, choices=["OFF", "ON"])
+    position = ReferenceField(StorageLocation)
     
     meta = {'collection': 'manipulator/manipulators'}
 
