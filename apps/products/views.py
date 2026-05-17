@@ -12,6 +12,7 @@ from apps.inventory.models import Inventory
 from apps.storage_location.models import StorageLocation
 from apps.manipulator.models import Manipulator, ManipulatorLog
 from apps.operation_logs.models import OperationLogs
+from utils.mqtt_broker import publish_product_update
 from utils.pagination_helper import generate_pagination
 
 
@@ -385,6 +386,24 @@ def product_to_dict(product: Product) -> dict:
         else None,
     }
 
+
+def product_to_table_dict(product: Product) -> dict:
+    product_data = product_to_dict(product)
+    quantity = 0
+
+    try:
+        inventories = Inventory.objects(product=product).only("product", "quantity", "storage_location")
+        for inventory in inventories:
+            if not _is_storage_location(inventory.storage_location):
+                continue
+
+            quantity += inventory.quantity or 0
+    except Exception:
+        quantity = 0
+
+    product_data["quantity"] = quantity
+    return product_data
+
 # Analitics: analyze product/medicine popularity
 
 def _parse_analytics_datetime(value, field_name):
@@ -717,7 +736,12 @@ def products_list_create(request):
                 return JsonResponse({"error": remaining_quantity}, status=400)
 
 
-        return JsonResponse(product_to_dict(product), status=200)
+        product_data = product_to_table_dict(product)
+        broker_result = publish_product_update("PRODUCT_CREATED", product_data)
+
+        response_data = product_to_dict(product)
+        response_data["broker"] = broker_result
+        return JsonResponse(response_data, status=200)
 
     return HttpResponseNotAllowed(["GET", "POST"])
 
@@ -779,11 +803,18 @@ def product_detail(request, sku: str):
         except ValidationError as e:
             return JsonResponse({"error": str(e)}, status=400)
 
-        return JsonResponse(product_to_dict(product), status=200)
+        product_data = product_to_table_dict(product)
+        broker_result = publish_product_update("PRODUCT_UPDATED", product_data)
+
+        response_data = product_to_dict(product)
+        response_data["broker"] = broker_result
+        return JsonResponse(response_data, status=200)
 
     if request.method == "DELETE":
+        deleted_product = product_to_table_dict(product)
         product.delete()
-        return JsonResponse({"message": "Product deleted"}, status=200)
+        broker_result = publish_product_update("PRODUCT_DELETED", deleted_product)
+        return JsonResponse({"message": "Product deleted", "broker": broker_result}, status=200)
 
     return HttpResponseNotAllowed(["GET", "PUT", "PATCH", "DELETE"])
 
@@ -823,6 +854,12 @@ def receive_product(request, sku: str):
 
     product.updated_at = datetime.datetime.utcnow()
     product.save()
+    product_data = product_to_table_dict(product)
+    broker_result = publish_product_update(
+        "PRODUCT_RECEIVED",
+        product_data,
+        {"quantity_delta": quantity},
+    )
 
     return JsonResponse(
         {
@@ -830,6 +867,7 @@ def receive_product(request, sku: str):
             "message": "Product received and placed in storage",
             "sku": product.sku,
             "added_quantity": quantity,
+            "broker": broker_result,
         },
         status=200,
     )
@@ -870,6 +908,12 @@ def dispense_product(request, sku: str):
 
     product.updated_at = datetime.datetime.utcnow()
     product.save()
+    product_data = product_to_table_dict(product)
+    broker_result = publish_product_update(
+        "PRODUCT_DISPENSED",
+        product_data,
+        {"quantity_delta": -quantity},
+    )
 
     return JsonResponse(
         {
@@ -877,6 +921,7 @@ def dispense_product(request, sku: str):
             "message": "Product dispensed",
             "sku": product.sku,
             "dispensed_quantity": quantity,
+            "broker": broker_result,
         },
         status=200,
     )

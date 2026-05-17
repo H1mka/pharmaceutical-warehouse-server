@@ -257,16 +257,22 @@ class ProductsViewsTestCase(TestCase):
     #      Тест 11: Приймання товару викликає розміщення на складі.
     # ==========================================
 
+    @patch("apps.products.views.publish_product_update")
     @patch("apps.products.views.allocate_product_quantity")
     @patch("apps.products.views.Product.objects")
     def test_receive_product_adds_quantity(
         self,
         mock_product_objects,
         mock_allocate_product_quantity,
+        mock_publish_product_update,
     ):
         product = self._product()
         mock_product_objects.get.return_value = product
         mock_allocate_product_quantity.return_value = (True, "")
+        mock_publish_product_update.return_value = {
+            "published": True,
+            "topic": "pharma/products/updates",
+        }
 
         response = self.client.post(
             "/products/SKU-001/receive",
@@ -277,7 +283,9 @@ class ProductsViewsTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["success"])
         self.assertEqual(response.json()["added_quantity"], 8)
+        self.assertTrue(response.json()["broker"]["published"])
         mock_allocate_product_quantity.assert_called_once_with(product, 8)
+        mock_publish_product_update.assert_called_once()
         product.save.assert_called_once()
 
 
