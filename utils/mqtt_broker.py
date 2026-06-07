@@ -25,6 +25,7 @@ def publish_product_update(event, product=None, extra=None):
             qos=settings.MQTT_QOS,
             retain=False,
         )
+
     except Exception as exc:
         return {
             "published": False,
@@ -37,15 +38,3 @@ def publish_product_update(event, product=None, extra=None):
         "topic": settings.MQTT_PRODUCT_UPDATES_TOPIC,
         "payload": payload,
     }
-
-
-def publish_product_received(product, quantity):
-    return publish_product_update(
-        "PRODUCT_RECEIVED",
-        {
-            "id": str(product.id),
-            "sku": product.sku,
-            "name": product.name,
-        },
-        {"quantity_delta": quantity},
-    )
