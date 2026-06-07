@@ -1,7 +1,8 @@
 import paho.mqtt.client as mqtt
 import json
 
-TOPIC = 'pharmaceutical_warehouse/manipulator_state'
+STATE_TOPIC = 'pharmaceutical_warehouse/manipulator_state'
+LOGS_TOPIC = 'pharmaceutical_warehouse/manipulator_logs'
 BROKER = 'broker.hivemq.com'
 PORT = 1883
 
@@ -28,12 +29,12 @@ def publish_manipulator_state(status, position=None, current_operation=None):
             "position": str(position) if position else None,
             "current_operation": current_operation
         }
-        client.publish(TOPIC, json.dumps(payload))
+        client.publish(STATE_TOPIC, json.dumps(payload))
     except Exception as e:
         print(f"Failed to publish manipulator state: {e}")
 
 def publish_new_log(log_dict):
     try:
-        client.publish("pharmaceutical_warehouse/manipulator_logs", json.dumps(log_dict))
+        client.publish(LOGS_TOPIC, json.dumps(log_dict))
     except Exception as e:
         print(f"Failed to publish new log: {e}")

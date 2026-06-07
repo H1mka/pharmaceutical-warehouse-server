@@ -131,6 +131,16 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
 ]
 
+MQTT_BROKER_HOST = os.getenv("MQTT_BROKER_HOST", "localhost")
+MQTT_BROKER_PORT = int(os.getenv("MQTT_BROKER_PORT", "1883"))
+MQTT_CLIENT_ID = os.getenv("MQTT_CLIENT_ID", "pharma-warehouse-server")
+MQTT_KEEPALIVE = int(os.getenv("MQTT_KEEPALIVE", "60"))
+MQTT_QOS = int(os.getenv("MQTT_QOS", "1"))
+MQTT_PRODUCT_UPDATES_TOPIC = os.getenv(
+    "MQTT_PRODUCT_UPDATES_TOPIC",
+    "pharma/products/updates",
+) 
+
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
