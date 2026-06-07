@@ -12,7 +12,7 @@ from apps.products.models import Product
 from apps.storage_location.models import StorageLocation
 
 from utils.pagination_helper import generate_pagination
-from .mqtt_client import publish_manipulator_state
+from .mqtt_manipulator import publish_manipulator_state
 
 
 manipulator_lock = threading.Lock()
@@ -96,7 +96,7 @@ def _execute_manipulator_task_internal(op_type, storage_location=None, product=N
 			l.product = product
 			l.product_quantity = product_quantity
 		l.save()
-		from apps.manipulator.mqtt_client import publish_new_log
+		from apps.manipulator.mqtt_manipulator import publish_new_log
 		publish_new_log(log_to_dict(l))
 		return l
 

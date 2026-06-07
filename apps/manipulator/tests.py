@@ -131,7 +131,7 @@ class ManipulatorViewsTestCase(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"], "Invalid JSON")
 
-    @patch('apps.manipulator.mqtt_client.publish_new_log')
+    @patch('apps.manipulator.mqtt_manipulator.publish_new_log')
     @patch('apps.manipulator.views.publish_manipulator_state')
     @patch('apps.manipulator.views.ManipulatorLog')
     @patch('apps.manipulator.views.Manipulator.objects')
@@ -156,7 +156,7 @@ class ManipulatorViewsTestCase(TestCase):
         self.assertTrue(mock_publish_state.called)
         self.assertTrue(mock_publish_log.called)
 
-    @patch('apps.manipulator.mqtt_client.publish_new_log')
+    @patch('apps.manipulator.mqtt_manipulator.publish_new_log')
     @patch('apps.manipulator.views.publish_manipulator_state')
     @patch('apps.manipulator.views.ManipulatorLog')
     @patch('apps.manipulator.views.Manipulator.objects')

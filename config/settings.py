@@ -139,7 +139,7 @@ MQTT_QOS = int(os.getenv("MQTT_QOS", "1"))
 MQTT_PRODUCT_UPDATES_TOPIC = os.getenv(
     "MQTT_PRODUCT_UPDATES_TOPIC",
     "pharma/products/updates",
-)
+) 
 
 
 # Static files (CSS, JavaScript, Images)
